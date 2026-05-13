@@ -236,8 +236,7 @@ app.post('/api/apply-payment', async (req, res) => {
       invoicePaymentCreate(input: {
         invoiceId: "${invoice.id}"
         amount: ${amount}
-        paidAt: "${paymentDate}"
-        details: "${paymentRef || ''}"
+        paidAt: "${paymentDate}T00:00:00Z"
       }) {
         invoicePayment {
           id
