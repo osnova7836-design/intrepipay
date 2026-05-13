@@ -126,7 +126,7 @@ app.get('/api/invoices', async (req, res) => {
     let pageCount = 0;
     let stopFetching = false;
     
-    while (hasNextPage && pageCount < 20 && !stopFetching) {
+    while (hasNextPage && pageCount < 50 && !stopFetching) {
       const afterClause = cursor ? `(after: "${cursor}")` : '';
       const query = `{
         invoices${afterClause} {
