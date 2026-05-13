@@ -126,7 +126,6 @@ app.get('/api/invoices', async (req, res) => {
     while (hasNextPage) {
       const query = `{
         invoices(
-          filter: { createdAt: { gte: "2025-01-01T00:00:00Z" } }
           ${cursor ? `after: "${cursor}"` : ''}
         ) {
           nodes {
@@ -166,6 +165,8 @@ app.get('/api/invoices', async (req, res) => {
       allInvoices = allInvoices.concat(page.nodes);
       hasNextPage = page.pageInfo.hasNextPage;
       cursor = page.pageInfo.endCursor;
+
+      if (allInvoices.length >= 500) break;
     }
 
     res.json(allInvoices);
