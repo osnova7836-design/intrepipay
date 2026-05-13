@@ -119,38 +119,56 @@ app.get('/api/invoices', async (req, res) => {
   try {
     const token = await getValidToken();
 
-    const query = `{
-      invoices {
-        nodes {
-          invoiceNumber
-          subject
-          total
-          invoiceStatus
-          client {
-            name
+    let allInvoices = [];
+    let hasNextPage = true;
+    let cursor = null;
+
+    while (hasNextPage) {
+      const query = `{
+        invoices(
+          filter: { createdAt: { gte: "2025-01-01T00:00:00Z" } }
+          ${cursor ? `after: "${cursor}"` : ''}
+        ) {
+          nodes {
+            invoiceNumber
+            subject
+            total
+            invoiceStatus
+            client {
+              name
+            }
+            jobberWebUri
           }
-          jobberWebUri
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
         }
+      }`;
+
+      const response = await fetch(GRAPHQL_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+          'X-JOBBER-GRAPHQL-VERSION': '2025-04-16'
+        },
+        body: JSON.stringify({ query })
+      });
+
+      const data = await response.json();
+
+      if (data.errors) {
+        return res.status(400).json({ error: data.errors });
       }
-    }`;
 
-    const response = await fetch(GRAPHQL_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-        'X-JOBBER-GRAPHQL-VERSION': '2025-04-16'
-      },
-      body: JSON.stringify({ query })
-    });
-
-    const data = await response.json();
-
-    if (data.errors) {
-      return res.status(400).json({ error: data.errors });
+      const page = data.data.invoices;
+      allInvoices = allInvoices.concat(page.nodes);
+      hasNextPage = page.pageInfo.hasNextPage;
+      cursor = page.pageInfo.endCursor;
     }
 
-    res.json(data.data.invoices.nodes);
+    res.json(allInvoices);
 
   } catch (err) {
     console.error('Invoice fetch error:', err);
