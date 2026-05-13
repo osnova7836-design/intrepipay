@@ -1,6 +1,7 @@
 const express = require('express');
 const fetch = require('node-fetch');
 const path = require('path');
+const fs = require('fs');
 
 const app = express();
 app.use(express.json());
@@ -16,7 +17,7 @@ const REDIRECT_URI = `${APP_URL}/auth/jobber/callback`;
 const TOKEN_URL = 'https://api.getjobber.com/api/oauth/token';
 const GRAPHQL_URL = 'https://api.getjobber.com/api/graphql';
 
-const fs = require('fs');
+// ── Persistent token storage ──────────────────────────────────────────────────
 const TOKEN_FILE = path.join(__dirname, 'tokens.json');
 
 function loadTokens() {
@@ -122,12 +123,11 @@ app.get('/api/invoices', async (req, res) => {
     let allInvoices = [];
     let hasNextPage = true;
     let cursor = null;
+    let pageCount = 0;
 
-    while (hasNextPage) {
+    while (hasNextPage && pageCount < 10) {
       const query = `{
-        invoices(
-          ${cursor ? `after: "${cursor}"` : ''}
-        ) {
+        invoices(${cursor ? `after: "${cursor}"` : ''}) {
           nodes {
             invoiceNumber
             subject
@@ -158,6 +158,7 @@ app.get('/api/invoices', async (req, res) => {
       const data = await response.json();
 
       if (data.errors) {
+        console.error('GraphQL errors:', JSON.stringify(data.errors));
         return res.status(400).json({ error: data.errors });
       }
 
@@ -165,12 +166,12 @@ app.get('/api/invoices', async (req, res) => {
       allInvoices = allInvoices.concat(page.nodes);
       hasNextPage = page.pageInfo.hasNextPage;
       cursor = page.pageInfo.endCursor;
+      pageCount++;
 
-      console.log(`Page fetched: ${page.nodes.length} invoices, hasNextPage: ${hasNextPage}, total so far: ${allInvoices.length}`);
-
-      if (allInvoices.length >= 500) break;
+      console.log(`Page ${pageCount}: ${page.nodes.length} invoices, hasNextPage: ${hasNextPage}, total: ${allInvoices.length}`);
     }
 
+    console.log(`Done. Total invoices fetched: ${allInvoices.length}`);
     res.json(allInvoices);
 
   } catch (err) {
