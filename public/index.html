@@ -147,6 +147,18 @@ tr:hover td{background:var(--surface2)}
 .b-adjustment{background:var(--surface2);color:var(--text-dim);border:1px solid var(--border)}
 
 .amt{font-family:'IBM Plex Mono',monospace;font-variant-numeric:tabular-nums}
+.apply-bar{display:flex;align-items:center;gap:10px;padding:.875rem 1.25rem;border-top:1px solid var(--border);background:var(--surface2);flex-wrap:wrap}
+.apply-date{display:flex;align-items:center;gap:6px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--text-muted)}
+.apply-date input{padding:5px 8px;font-size:11px;width:130px}
+.btn-apply{padding:7px 14px;border-radius:6px;font-family:'IBM Plex Mono',monospace;font-size:10px;cursor:pointer;letter-spacing:0.06em;text-transform:uppercase;border:none;font-weight:500;transition:all 0.15s}
+.btn-apply-all{background:var(--teal);color:#fff}
+.btn-apply-all:hover{background:var(--teal-light)}
+.btn-apply-all:disabled{opacity:0.35;cursor:not-allowed}
+.btn-apply-one{background:none;border:1px solid var(--border-strong);color:var(--text-dim);padding:3px 8px;font-size:9px}
+.btn-apply-one:hover{border-color:var(--teal);color:var(--teal);background:var(--teal-bg)}
+.btn-apply-one:disabled{opacity:0.35;cursor:not-allowed}
+.apply-status{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--green);display:none}
+.apply-blocked{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--red)}
 </style>
 </head>
 <body>
@@ -965,6 +977,7 @@ function renderReport(results) {
         </div>
       </div>
       ${hasIssues?`<div class="pblock-warn">⚠ ${r.discrepancies} discrepanc${r.discrepancies===1?'y':'ies'} — review before applying payment</div>`:''}
+      ${renderApplyBar(r)}
       <div class="tbl-wrap">
         <table>
           <thead><tr>
@@ -993,7 +1006,7 @@ function renderReport(results) {
                 <td class="amt" style="text-align:right">${fmt(i.remittance_amount)}</td>
                 <td class="amt" style="text-align:right">${i.jobber_amount?fmt(i.jobber_amount):'—'}</td>
                 <td class="amt" style="text-align:right;color:${Math.abs(diff)>0.01?'var(--amber)':'var(--text-muted)'}">${Math.abs(diff)>0.01?fmt(Math.abs(diff)):'—'}</td>
-                <td>${matchBadge}</td>
+                <td style="display:flex;align-items:center;gap:6px">${matchBadge}${i.jobber_invoice&&i.status==='match'?`<button class="btn-apply btn-apply-one" onclick="applyOne('${i.jobber_invoice}','${i.remittance_amount}',this)" ${isBlocked(r)?'disabled':''}>Apply</button>`:''}</td>
               </tr>`;
             }).join('')}
             <tr class="tr-total">
@@ -1211,6 +1224,125 @@ function manageKey() {
 }
 window._apiKey = localStorage.getItem('ip_key')||'';
 if (window._apiKey) { setTimeout(()=>{ el('key-btn').textContent='🔑 Key ✓'; el('key-btn').style.color='#00c9a7'; },100); }
+
+  function isBlocked(r) {
+  return r.line_items.some(i => i.status === 'missing' || i.status === 'draft');
+}
+
+function renderApplyBar(r) {
+  const blocked = isBlocked(r);
+  const blockReason = r.line_items.find(i => i.status === 'missing') ? 'missing invoices' : 'draft invoices';
+  const matchedItems = r.line_items.filter(i => i.status === 'match' || i.status === 'shortpay' || i.status === 'overpay');
+
+  if (matchedItems.length === 0) return '';
+
+  return `<div class="apply-bar">
+    <div class="apply-date">
+      <span>Payment date</span>
+      <input type="date" id="date-${r.ref||r.co.replace(/\s/g,'')}" value="${todayISO()}">
+    </div>
+    ${blocked
+      ? `<span class="apply-blocked">⛔ Blocked — resolve ${blockReason} before applying</span>`
+      : `<button class="btn-apply btn-apply-all"
+          onclick="applyAll('${r.ref||''}','${r.co||''}',this)">
+          ▶ Apply all ${matchedItems.length} payment${matchedItems.length!==1?'s':''}
+        </button>`
+    }
+    <span class="apply-status" id="status-${r.ref||r.co.replace(/\s/g,'')}"></span>
+  </div>`;
+}
+
+function todayISO() {
+  return new Date().toISOString().split('T')[0];
+}
+
+async function applyOne(invoiceNumber, amount, btn) {
+  const block = btn.closest('.pblock');
+  const dateInput = block.querySelector('input[type=date]');
+  const paymentDate = dateInput ? dateInput.value : todayISO();
+  const ref = block.querySelector('.pblock-meta-item b')?.textContent || '';
+
+  if (!confirm(`Apply $${amount} to Invoice #${invoiceNumber}?\nDate: ${paymentDate}\nRef: ${ref}`)) return;
+
+  btn.disabled = true;
+  btn.textContent = '⟳';
+
+  try {
+    const resp = await fetch('/api/apply-payment', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ invoiceNumber, amount: parseFloat(amount), paymentRef: ref, paymentDate })
+    });
+    const data = await resp.json();
+    if (data.success) {
+      btn.textContent = '✓';
+      btn.style.color = 'var(--green)';
+      btn.style.borderColor = 'var(--green)';
+    } else {
+      btn.textContent = '✗ Error';
+      btn.disabled = false;
+      alert('Error: ' + (data.error || 'Unknown error'));
+    }
+  } catch(e) {
+    btn.textContent = '✗';
+    btn.disabled = false;
+    alert('Error: ' + e.message);
+  }
+}
+
+async function applyAll(ref, co, btn) {
+  const block = btn.closest('.pblock');
+  const dateInput = block.querySelector('input[type=date]');
+  const paymentDate = dateInput ? dateInput.value : todayISO();
+  const statusEl = block.querySelector('.apply-status');
+
+  // Gather all matched line items from window._lastResults
+  const result = window._lastResults?.find(r => r.ref === ref && r.co === co);
+  if (!result) return;
+
+  const matchedItems = result.line_items
+    .filter(i => i.status === 'match' || i.status === 'shortpay' || i.status === 'overpay')
+    .map(i => ({ invoiceNumber: i.jobber_invoice, amount: Math.abs(i.remittance_amount) }));
+
+  if (matchedItems.length === 0) return;
+
+  const hasDiscrepancies = result.line_items.some(i => i.status === 'shortpay' || i.status === 'overpay');
+  if (hasDiscrepancies) {
+    if (!confirm(`This check has short pays or over pays.\nApply ${matchedItems.length} payments anyway?\nDate: ${paymentDate}\nRef: ${ref}`)) return;
+  } else {
+    if (!confirm(`Apply ${matchedItems.length} payment${matchedItems.length!==1?'s':''} to Jobber?\nDate: ${paymentDate}\nRef: ${ref}`)) return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = '⟳ Applying...';
+
+  try {
+    const resp = await fetch('/api/apply-all-payments', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lineItems: matchedItems, paymentRef: ref, paymentDate })
+    });
+    const data = await resp.json();
+
+    if (data.succeeded > 0) {
+      btn.textContent = `✓ ${data.succeeded} applied`;
+      btn.style.background = 'var(--green)';
+      if (statusEl) {
+        statusEl.style.display = '';
+        statusEl.textContent = data.failed > 0 ? `⚠ ${data.failed} failed` : '✓ All payments applied in Jobber';
+      }
+    } else {
+      btn.textContent = '✗ Failed';
+      btn.disabled = false;
+      alert('Error applying payments: ' + JSON.stringify(data.results));
+    }
+  } catch(e) {
+    btn.textContent = '✗ Error';
+    btn.disabled = false;
+    alert('Error: ' + e.message);
+  }
+}
+
 </script>
 </body>
 </html>
