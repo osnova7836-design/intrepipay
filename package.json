@@ -1,0 +1,13 @@
+{
+  "name": "intrepipay",
+  "version": "1.0.0",
+  "description": "IntrepiPay — Payment reconciliation for home service businesses",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "node-fetch": "^2.7.0"
+  }
+}
