@@ -106,12 +106,12 @@ app.get('/api/invoices', async (req, res) => {
     const token = await getValidToken();
 
     const query = `{
-      invoices(filter: { status: [DRAFT, AWAITING_PAYMENT, PAST_DUE] }) {
+      invoices {
         nodes {
           invoiceNumber
           subject
           total
-          status
+          invoiceStatus
           client {
             name
           }
