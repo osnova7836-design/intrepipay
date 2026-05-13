@@ -1301,53 +1301,69 @@ async function applyAll(ref, co, btn) {
   const block = btn.closest('.pblock');
   const dateInput = block.querySelector('input[type=date]');
   const paymentDate = dateInput ? dateInput.value : todayISO();
-  const statusEl = block.querySelector('.apply-status');
 
-  // Gather all matched line items from window._lastResults
   const result = window._lastResults?.find(r => r.ref === ref && r.co === co);
   if (!result) return;
 
-  const matchedItems = result.line_items
-    .filter(i => i.status === 'match' || i.status === 'shortpay' || i.status === 'overpay')
-    .map(i => ({ invoiceNumber: i.jobber_invoice, amount: Math.abs(i.remittance_amount) }));
+  const matchedItems = result.line_items.filter(i =>
+    i.status === 'match' || i.status === 'shortpay' || i.status === 'overpay'
+  );
 
   if (matchedItems.length === 0) return;
 
-  const hasDiscrepancies = result.line_items.some(i => i.status === 'shortpay' || i.status === 'overpay');
-  if (hasDiscrepancies) {
-    if (!confirm(`This check has short pays or over pays.\nApply ${matchedItems.length} payments anyway?\nDate: ${paymentDate}\nRef: ${ref}`)) return;
-  } else {
-    if (!confirm(`Apply ${matchedItems.length} payment${matchedItems.length!==1?'s':''} to Jobber?\nDate: ${paymentDate}\nRef: ${ref}`)) return;
-  }
+  // Build clipboard text
+  const clipText = `Payment Ref: ${ref}\nDate: ${paymentDate}\nAmount: ${fmt(result.total_paid)}\n\nInvoices:\n` +
+    matchedItems.map(i => `#${i.jobber_invoice} — ${fmt(i.remittance_amount)}`).join('\n');
 
-  btn.disabled = true;
-  btn.textContent = '⟳ Applying...';
-
+  // Copy to clipboard
   try {
-    const resp = await fetch('/api/apply-all-payments', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ lineItems: matchedItems, paymentRef: ref, paymentDate })
-    });
-    const data = await resp.json();
-
-    if (data.succeeded > 0) {
-      btn.textContent = `✓ ${data.succeeded} applied`;
-      btn.style.background = 'var(--green)';
-      if (statusEl) {
-        statusEl.style.display = '';
-        statusEl.textContent = data.failed > 0 ? `⚠ ${data.failed} failed` : '✓ All payments applied in Jobber';
-      }
-    } else {
-      btn.textContent = '✗ Failed';
-      btn.disabled = false;
-      alert('Error applying payments: ' + JSON.stringify(data.results));
-    }
+    await navigator.clipboard.writeText(clipText);
   } catch(e) {
-    btn.textContent = '✗ Error';
-    btn.disabled = false;
-    alert('Error: ' + e.message);
+    console.warn('Clipboard copy failed:', e);
   }
+
+  // Open first invoice in Jobber
+  const firstItem = matchedItems[0];
+  const firstRow = jobberRows.find(r => String(r['Invoice #']).trim() === String(firstItem.jobber_invoice).trim());
+  if (firstRow?.jobberWebUri) {
+    window.open(firstRow.jobberWebUri, '_blank');
+  }
+
+  // Show checklist popup
+  const invoiceList = matchedItems.map(i =>
+    `<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);font-family:'IBM Plex Mono',monospace;font-size:11px">
+      <span style="color:var(--text-dim)">#${i.jobber_invoice}</span>
+      <span style="color:var(--text-muted)">${i.jobber_subject||''}</span>
+      <span style="color:var(--teal);font-weight:600">${fmt(i.remittance_amount)}</span>
+    </div>`
+  ).join('');
+
+  // Create modal
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:200;display:flex;align-items:center;justify-content:center;padding:1rem';
+  overlay.innerHTML = `
+    <div style="background:var(--surface);border-radius:12px;padding:1.5rem;width:100%;max-width:480px;max-height:80vh;overflow-y:auto;box-shadow:0 8px 24px rgba(0,0,0,0.15)">
+      <div style="font-family:'Playfair Display',serif;font-size:20px;margin-bottom:.25rem">Apply Payment</div>
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--text-muted);margin-bottom:1rem">
+        Ref: <b style="color:var(--text-dim)">${ref}</b> · Date: <b style="color:var(--text-dim)">${paymentDate}</b> · ${fmt(result.total_paid)}
+      </div>
+      <div style="background:var(--teal-bg);border:1px solid var(--teal-border);border-radius:8px;padding:.75rem;margin-bottom:1rem;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--teal)">
+        ✓ Payment details copied to clipboard — paste into Jobber's collect payment screen
+      </div>
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:.5rem">
+        Select these ${matchedItems.length} invoices in Jobber:
+      </div>
+      ${invoiceList}
+      <div style="display:flex;gap:8px;margin-top:1rem;justify-content:flex-end">
+        <button onclick="this.closest('.apply-overlay').remove()" 
+          style="padding:8px 16px;border-radius:6px;font-family:'IBM Plex Mono',monospace;font-size:11px;cursor:pointer;border:1px solid var(--border-strong);background:none;color:var(--text-dim)">
+          Done
+        </button>
+      </div>
+    </div>`;
+  overlay.classList.add('apply-overlay');
+  overlay.addEventListener('click', e => { if(e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
 }
 
 </script>
