@@ -1,0 +1,1148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IntrepiPay — A bold, smarter way to handle payments</title>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#f5f3ef;--surface:#fff;--surface2:#f0ede8;--surface3:#e8e4dd;
+  --teal:#007a63;--teal-light:#00a688;--teal-bg:#e6f4f1;--teal-border:#b3ddd6;
+  --amber:#b45309;--amber-bg:#fef3c7;--amber-border:#fcd34d;
+  --red:#b91c1c;--red-bg:#fee2e2;--red-border:#fca5a5;
+  --green:#15803d;--green-bg:#dcfce7;--green-border:#86efac;
+  --blue:#1d4ed8;--blue-bg:#dbeafe;
+  --text:#1c1917;--text-dim:#57534e;--text-muted:#a8a29e;
+  --border:#e2ddd8;--border-strong:#c8c3bc;
+  --shadow:0 1px 3px rgba(0,0,0,0.08);--shadow-md:0 4px 6px rgba(0,0,0,0.07);
+}
+body{background:var(--bg);color:var(--text);font-family:'IBM Plex Sans',sans-serif;font-size:14px;min-height:100vh;line-height:1.6}
+.header{background:var(--text);padding:1.25rem 2rem;display:flex;align-items:center;justify-content:space-between}
+.logo-name{font-family:'Playfair Display',serif;font-size:26px;font-weight:700;color:#fff}
+.logo-name span{color:#00c9a7}
+.logo-divider{width:1px;height:20px;background:rgba(255,255,255,0.2);margin:0 8px}
+.logo-tag{font-family:'IBM Plex Mono',monospace;font-size:10px;color:rgba(255,255,255,0.4);letter-spacing:0.08em;text-transform:uppercase}
+.header-right{display:flex;align-items:center;gap:10px}
+.key-btn{background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);color:rgba(255,255,255,0.6);font-family:'IBM Plex Mono',monospace;font-size:10px;padding:4px 10px;border-radius:4px;cursor:pointer;letter-spacing:0.05em}
+.main{display:grid;grid-template-columns:340px 1fr;min-height:calc(100vh - 68px)}
+
+/* Panel */
+.panel{background:var(--surface);border-right:1px solid var(--border);padding:1.5rem;display:flex;flex-direction:column;gap:1.25rem;overflow-y:auto}
+.step-header{display:flex;align-items:center;gap:10px;margin-bottom:.625rem}
+.step-num{width:24px;height:24px;border-radius:50%;background:var(--text);color:#fff;font-family:'IBM Plex Mono',monospace;font-size:11px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.step-num.done{background:var(--teal)}
+.step-title{font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:var(--text-dim);font-weight:500}
+.upload-zone{border:1.5px dashed var(--border-strong);border-radius:8px;padding:1rem;text-align:center;cursor:pointer;transition:all 0.2s;background:var(--surface2);position:relative;display:flex;flex-direction:column;align-items:center;gap:5px;min-height:80px;justify-content:center}
+.upload-zone:hover{border-color:var(--teal);background:var(--teal-bg)}
+.upload-zone.has-file{border-color:var(--teal);border-style:solid;background:var(--teal-bg)}
+.upload-zone input{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%}
+.uz-icon{font-size:18px}.uz-title{font-size:12px;color:var(--text);font-weight:500}.uz-sub{font-size:10px;color:var(--text-muted);font-family:'IBM Plex Mono',monospace}
+.status-line{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--teal);margin-top:4px;display:none}
+.divider{height:1px;background:var(--border);margin:.25rem 0}
+
+/* Payments list */
+.payments-list{display:flex;flex-direction:column;gap:.5rem}
+.payment-chip{background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:.625rem .875rem;display:flex;align-items:center;justify-content:space-between}
+.payment-chip-info{flex:1;min-width:0}
+.payment-chip-co{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--teal);text-transform:uppercase;letter-spacing:0.06em}
+.payment-chip-detail{font-size:11px;color:var(--text-muted);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.payment-chip-remove{background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:16px;padding:0 0 0 8px;flex-shrink:0}
+.payment-chip-remove:hover{color:var(--red)}
+.add-btn{width:100%;padding:10px;border:1.5px dashed var(--border-strong);border-radius:8px;background:none;color:var(--text-dim);font-family:'IBM Plex Sans',sans-serif;font-size:12px;cursor:pointer;transition:all 0.15s;display:flex;align-items:center;justify-content:center;gap:6px}
+.add-btn:hover{border-color:var(--teal);color:var(--teal);background:var(--teal-bg)}
+
+/* Buttons */
+.btn{padding:8px 16px;border-radius:6px;font-family:'IBM Plex Mono',monospace;font-size:11px;cursor:pointer;transition:all 0.15s;letter-spacing:0.06em;text-transform:uppercase;border:none;font-weight:500}
+.btn-primary{background:var(--teal);color:#fff}
+.btn-primary:hover{background:var(--teal-light)}
+.btn-outline{background:none;border:1px solid var(--border-strong);color:var(--text-dim)}
+.btn-outline:hover{border-color:var(--teal);color:var(--teal);background:var(--teal-bg)}
+.btn-run{background:var(--text);color:#fff;width:100%;padding:14px;font-size:12px;border-radius:8px;letter-spacing:0.1em;cursor:pointer;border:none;font-family:'IBM Plex Mono',monospace;font-weight:500;transition:background 0.15s}
+.btn-run:hover{background:#2c2825}
+.btn-run:disabled{opacity:0.4;cursor:not-allowed}
+
+/* Modal */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:100;display:flex;align-items:center;justify-content:center;padding:1rem}
+.modal{background:var(--surface);border-radius:12px;padding:1.5rem;width:100%;max-width:500px;box-shadow:var(--shadow-md);max-height:90vh;overflow-y:auto}
+.modal-title{font-family:'Playfair Display',serif;font-size:20px;margin-bottom:1rem}
+.modal-tabs{display:flex;gap:4px;margin-bottom:.875rem;border-bottom:1px solid var(--border)}
+.modal-tab{padding:6px 12px;font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.06em;text-transform:uppercase;cursor:pointer;color:var(--text-muted);border-bottom:2px solid transparent;background:none;border-top:none;border-left:none;border-right:none;transition:all 0.15s}
+.modal-tab.active{color:var(--teal);border-bottom-color:var(--teal)}
+.modal-actions{display:flex;gap:8px;margin-top:1rem;justify-content:flex-end}
+.field{display:flex;flex-direction:column;gap:4px;margin-bottom:.75rem}
+.field label{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--text-muted);letter-spacing:0.06em;text-transform:uppercase}
+input[type=text],input[type=date],select,textarea{background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:'IBM Plex Sans',sans-serif;font-size:13px;padding:8px 10px;outline:none;width:100%;transition:border-color 0.2s}
+input:focus,select:focus,textarea:focus{border-color:var(--teal);box-shadow:0 0 0 3px rgba(0,122,99,0.08)}
+textarea{resize:vertical;min-height:110px;line-height:1.5}
+textarea::placeholder{color:var(--text-muted)}
+
+/* Results panel */
+.results-panel{padding:2rem;overflow-y:auto;background:var(--bg)}
+.empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:400px;gap:1rem;text-align:center}
+.empty-icon{font-size:48px;opacity:0.2}
+.empty-title{font-family:'Playfair Display',serif;font-size:24px;color:var(--text-dim);font-weight:400}
+.empty-sub{font-size:13px;max-width:360px;line-height:1.7;color:var(--text-muted)}
+.spinner{width:32px;height:32px;border:2px solid var(--border);border-top-color:var(--teal);border-radius:50%;animation:spin 0.8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.loading{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:400px;gap:1rem}
+.loading-text{font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--text-muted)}
+.loading-steps{display:flex;flex-direction:column;gap:6px;margin-top:.5rem}
+.loading-step{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--text-muted);display:flex;align-items:center;gap:8px}
+.loading-step.active{color:var(--teal)}
+.loading-step.done{color:var(--green)}
+
+/* Report */
+.report-header{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:1.5rem;flex-wrap:wrap;gap:1rem}
+.report-title{font-family:'Playfair Display',serif;font-size:28px;font-weight:700;color:var(--text)}
+.report-subtitle{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--text-muted);margin-top:4px}
+.export-btns{display:flex;gap:8px;flex-wrap:wrap}
+
+/* Summary cards */
+.summary-bar{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:1.5rem}
+.summary-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:1rem;box-shadow:var(--shadow)}
+.sc-label{font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--text-muted);letter-spacing:0.1em;text-transform:uppercase;margin-bottom:5px}
+.sc-value{font-family:'Playfair Display',serif;font-size:22px;font-weight:700;color:var(--text)}
+.sc-value.green{color:var(--green)}.sc-value.amber{color:var(--amber)}.sc-value.red{color:var(--red)}.sc-value.teal{color:var(--teal)}
+.sc-sub{font-size:10px;color:var(--text-muted);margin-top:2px;font-family:'IBM Plex Mono',monospace}
+
+/* Payment blocks */
+.pblock{background:var(--surface);border:1px solid var(--border);border-radius:12px;margin-bottom:1.25rem;overflow:hidden;box-shadow:var(--shadow)}
+.pblock-head{padding:1rem 1.25rem;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:.5rem}
+.pblock-company{font-family:'Playfair Display',serif;font-size:18px;font-weight:700}
+.pblock-meta{display:flex;flex-wrap:wrap;gap:12px;margin-top:4px}
+.pblock-meta-item{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--text-muted)}
+.pblock-meta-item b{color:var(--text-dim)}
+.pblock-right{text-align:right}
+.pblock-amount{font-family:'Playfair Display',serif;font-size:20px;font-weight:700;color:var(--teal)}
+.pblock-status{font-family:'IBM Plex Mono',monospace;font-size:10px;margin-top:2px}
+.pblock-warn{background:var(--amber-bg);border-top:1px solid var(--amber-border);padding:.625rem 1.25rem;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--amber)}
+
+/* Table */
+.tbl-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{text-align:left;padding:8px 12px;font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:0.08em;text-transform:uppercase;color:var(--text-muted);background:var(--surface2);border-bottom:1px solid var(--border);white-space:nowrap}
+td{padding:9px 12px;border-bottom:1px solid var(--surface2);vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:var(--surface2)}
+.tr-total td{background:var(--teal-bg);border-top:1px solid var(--teal-border);font-weight:600;color:var(--teal);font-family:'IBM Plex Mono',monospace}
+.tr-discrep td{background:var(--amber-bg)}
+.tr-missing td{background:var(--red-bg)}
+
+/* Badges */
+.badge{display:inline-flex;align-items:center;font-family:'IBM Plex Mono',monospace;font-size:9px;padding:2px 7px;border-radius:20px;letter-spacing:0.05em;text-transform:uppercase;font-weight:500;white-space:nowrap}
+.b-match{background:var(--green-bg);color:var(--green);border:1px solid var(--green-border)}
+.b-pastdue{background:var(--amber-bg);color:var(--amber);border:1px solid var(--amber-border)}
+.b-draft{background:var(--surface2);color:var(--text-muted);border:1px solid var(--border)}
+.b-missing{background:var(--red-bg);color:var(--red);border:1px solid var(--red-border)}
+.b-discrep{background:var(--amber-bg);color:var(--amber);border:1px solid var(--amber-border)}
+.b-shortpay{background:var(--amber-bg);color:var(--amber);border:1px solid var(--amber-border)}
+.b-overpay{background:var(--blue-bg);color:var(--blue);border:1px solid #93c5fd}
+.b-deduction{background:var(--surface2);color:var(--text-muted);border:1px solid var(--border)}
+.b-adjustment{background:var(--surface2);color:var(--text-dim);border:1px solid var(--border)}
+
+.amt{font-family:'IBM Plex Mono',monospace;font-variant-numeric:tabular-nums}
+</style>
+</head>
+<body>
+
+<header class="header">
+  <div style="display:flex;align-items:baseline;gap:10px">
+    <div class="logo-name">Intrepi<span>Pay</span></div>
+    <div class="logo-divider"></div>
+    <div class="logo-tag">A bold, smarter way to handle payments</div>
+  </div>
+  <div class="header-right">
+    <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:rgba(255,255,255,0.4)">IntrepiX Group LLC</span>
+    <button class="key-btn" id="key-btn" onclick="manageKey()">🔑 API Key</button>
+  </div>
+</header>
+
+<div class="main">
+
+  <!-- PANEL -->
+  <aside class="panel">
+
+    <div>
+      <div class="step-header">
+        <div class="step-num" id="s1">1</div>
+        <div class="step-title">Jobber invoice export</div>
+      </div>
+      <div class="upload-zone" id="jz">
+        <input type="file" accept=".csv" onchange="loadJobber(this)">
+        <div class="uz-icon">💼</div>
+        <div class="uz-title" id="jt">Drop Jobber invoice CSV</div>
+        <div class="uz-sub">All invoices · all statuses</div>
+      </div>
+      <div class="status-line" id="js"></div>
+    </div>
+
+    <div class="divider"></div>
+
+    <div>
+      <div class="step-header">
+        <div class="step-num" id="s2">2</div>
+        <div class="step-title">Bank statement <span style="font-size:9px;color:var(--text-muted);text-transform:none;letter-spacing:0">(optional)</span></div>
+      </div>
+      <div class="upload-zone" id="bz">
+        <input type="file" accept=".xlsx,.xls,.csv" onchange="loadBank(this)">
+        <div class="uz-icon">🏦</div>
+        <div class="uz-title" id="bt">Drop bank export</div>
+        <div class="uz-sub">Excel or CSV · BofA format</div>
+      </div>
+      <div class="status-line" id="bs"></div>
+    </div>
+
+    <div class="divider"></div>
+
+    <div>
+      <div class="step-header">
+        <div class="step-num" id="s3">3</div>
+        <div class="step-title">Payments to reconcile</div>
+      </div>
+      <div class="upload-zone" id="mtz" style="margin-bottom:.625rem">
+        <input type="file" accept=".xlsx,.xls" onchange="loadMultiTab(this)">
+        <div class="uz-icon">📊</div>
+        <div class="uz-title" id="mt-title">Drop multi-tab Excel</div>
+        <div class="uz-sub">One tab per payment · all added at once</div>
+      </div>
+      <div class="status-line" id="mts"></div>
+      <div style="display:flex;align-items:center;gap:8px;margin:.5rem 0">
+        <div style="flex:1;height:1px;background:var(--border)"></div>
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--text-muted)">or add individually</div>
+        <div style="flex:1;height:1px;background:var(--border)"></div>
+      </div>
+      <div class="payments-list" id="plist"></div>
+      <button class="add-btn" onclick="openModal()">+ Add single payment</button>
+    </div>
+
+    <div class="divider"></div>
+
+    <button class="btn-run" id="run-btn" onclick="run()" disabled>▶ Run reconciliation</button>
+
+  </aside>
+
+  <!-- RESULTS -->
+  <div class="results-panel" id="results">
+    <div class="empty-state">
+      <div class="empty-icon">⚡</div>
+      <div class="empty-title">Ready to reconcile</div>
+      <div class="empty-sub">Upload Jobber export, add payments with remittances, hit run. IntrepiPay matches programmatically and only uses AI for the hard cases.</div>
+    </div>
+  </div>
+
+</div>
+
+<!-- MODAL -->
+<div class="modal-overlay" id="modal" style="display:none" onclick="closeOut(event)">
+  <div class="modal">
+    <div class="modal-title">Add payment</div>
+    <div class="field">
+      <label>Company</label>
+      <select id="m-co">
+        <option value="">— select —</option>
+        <option>First American / FALCON</option>
+        <option>Rely Home Warranty</option>
+        <option>Lessen</option>
+        <option>Cinch Home Services</option>
+        <option>Frontdoor</option>
+        <option>Rheem</option>
+        <option>Old Republic</option>
+        <option>All County First Choice</option>
+        <option>Other</option>
+      </select>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">
+      <div class="field"><label>Payment ref / ID</label><input type="text" id="m-ref" placeholder="EFTPY059840..."></div>
+      <div class="field"><label>Expected amount</label><input type="text" id="m-amt" placeholder="$0.00"></div>
+    </div>
+    <div class="field">
+      <label>Remittance</label>
+      <div class="modal-tabs">
+        <button class="modal-tab active" onclick="setSrc('text',this)">Paste</button>
+        <button class="modal-tab" onclick="setSrc('csv',this)">CSV / Excel</button>
+        <button class="modal-tab" onclick="setSrc('pdf',this)">PDF</button>
+      </div>
+      <div id="ms-text"><textarea id="m-remit" placeholder="Paste EFT report, portal CSV text, or any remittance..."></textarea></div>
+      <div id="ms-csv" style="display:none">
+        <div class="upload-zone" id="mc-zone"><input type="file" accept=".csv,.xlsx,.xls" onchange="loadMCSV(this)">
+          <div class="uz-icon">📄</div><div class="uz-title" id="mc-title">Drop CSV or Excel</div><div class="uz-sub">Rely portal, Lessen, etc.</div>
+        </div>
+      </div>
+      <div id="ms-pdf" style="display:none">
+        <div class="upload-zone" id="mp-zone"><input type="file" accept=".pdf" onchange="loadMPDF(this)">
+          <div class="uz-icon">📋</div><div class="uz-title" id="mp-title">Drop PDF voucher</div><div class="uz-sub">Lessen, Frontdoor, All County, etc.</div>
+        </div>
+        <div id="mp-preview" style="display:none;margin-top:.75rem;background:var(--surface2);border-radius:6px;padding:.75rem;font-size:10px;font-family:'IBM Plex Mono',monospace;color:var(--text-dim);max-height:100px;overflow-y:auto;border:1px solid var(--border)"></div>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="addPayment()">Add payment</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
+<script>
+// ── State ─────────────────────────────────────────────────────────────────────
+let jobberRows = [];   // all rows from Jobber CSV
+let jobberMap = {};    // subject -> row (for fast lookup)
+let bankTxns = [];
+let payments = [];
+let modalSrc = 'text';
+let mCSV = null, mPDF = null;
+
+// ── Utils ─────────────────────────────────────────────────────────────────────
+const fmt = n => n==null||isNaN(n) ? '—' : '$'+Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+const fmtDate = d => !d?'—':d instanceof Date?d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):String(d);
+const uid = () => Date.now()+Math.random();
+const el = id => document.getElementById(id);
+
+// ── Step 1: Jobber ────────────────────────────────────────────────────────────
+function loadJobber(input) {
+  const file = input.files[0]; if (!file) return;
+  Papa.parse(file, {header:true, skipEmptyLines:true, complete: r => {
+    jobberRows = r.data;
+    // Build lookup map: subject -> array of rows (there can be duplicates across clients)
+    jobberMap = {};
+    jobberRows.forEach(row => {
+      const subj = String(row['Subject']||'').trim();
+      const inv = String(row['Invoice #']||'').trim();
+      if (subj) {
+        if (!jobberMap[subj]) jobberMap[subj] = [];
+        jobberMap[subj].push(row);
+      }
+      if (inv) jobberMap['inv:'+inv] = [row];
+    });
+    el('jz').classList.add('has-file');
+    el('jt').textContent = '✓ ' + file.name;
+    const pd = jobberRows.filter(r=>(r['Status']||'').trim()==='Past Due').length;
+    const dr = jobberRows.filter(r=>(r['Status']||'').trim()==='Draft').length;
+    const js = el('js'); js.style.display=''; js.textContent = `${jobberRows.length} invoices · ${pd} past due · ${dr} draft`;
+    el('s1').classList.add('done');
+    input.value=''; checkReady();
+  }});
+}
+
+// ── Step 2: Bank ──────────────────────────────────────────────────────────────
+async function loadBank(input) {
+  const file = input.files[0]; if (!file) return;
+  el('bz').classList.add('has-file');
+  el('bt').textContent = '⟳ Reading...';
+  try {
+    let rawRows = [];
+    if (file.name.endsWith('.csv')) {
+      const t = await file.text();
+      rawRows = Papa.parse(t, {header:false, skipEmptyLines:false}).data;
+    } else {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, {type:'array', cellDates:true});
+      rawRows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {header:1, defval:null, raw:false, dateNF:'yyyy-mm-dd'});
+    }
+    let hr = -1;
+    for (let i=0; i<Math.min(rawRows.length,20); i++) {
+      if (rawRows[i]&&rawRows[i].some(c=>String(c||'').toLowerCase().trim()==='date')) {hr=i;break;}
+    }
+    if (hr >= 0) {
+      const h = rawRows[hr].map(c=>String(c||'').toLowerCase().trim());
+      const di=h.findIndex(x=>x==='date'), dsi=h.findIndex(x=>x.includes('descr')), ai=h.findIndex(x=>x.includes('amount')&&!x.includes('running')&&!x.includes('bal'));
+      bankTxns = [];
+      for (let i=hr+1; i<rawRows.length; i++) {
+        const r=rawRows[i]; if(!r||!r[di]) continue;
+        const amt = parseFloat(String(r[ai]||'0').replace(/[$,]/g,''));
+        if (isNaN(amt)||amt<=0) continue;
+        const desc = String(r[dsi]||'');
+        const payId = (desc.match(/(?:PAYABLES\s+)?ID:([A-Z0-9]+)/i)||[])[1]||(desc.match(/EFTPY([0-9]+)/i)||[])[1]||null;
+        bankTxns.push({date:r[di], desc, amount:amt, paymentId:payId, co:getBankCo(desc)});
+      }
+    }
+    el('bt').textContent = '✓ ' + file.name;
+    const bs = el('bs'); bs.style.display=''; bs.textContent = `${bankTxns.length} credit deposits loaded`;
+    el('s2').classList.add('done');
+  } catch(e) { el('bt').textContent = '⚠ Error reading file'; }
+  input.value=''; checkReady();
+}
+
+function getBankCo(desc) {
+  const d = desc.toUpperCase();
+  if (d.includes('1ST AME')||d.includes('FIRST AMERICAN')) return 'First American';
+  if (d.includes('SMS ASSIST')||d.includes('LESSEN')) return 'Lessen';
+  if (d.includes('RHEEM')) return 'Rheem';
+  if (d.includes('FRONTDOOR')) return 'Frontdoor';
+  if (d.includes('CINCH')) return 'Cinch';
+  if (d.includes('RELY')) return 'Rely';
+  if (d.includes('ALLCOUNTY')||d.includes('PL*ALLCOUNTY')) return 'All County';
+  return null;
+}
+
+// ── Modal ─────────────────────────────────────────────────────────────────────
+function setSrc(src, btn) {
+  modalSrc=src;
+  document.querySelectorAll('.modal-tab').forEach(t=>t.classList.remove('active'));
+  btn.classList.add('active');
+  el('ms-text').style.display=src==='text'?'':'none';
+  el('ms-csv').style.display=src==='csv'?'':'none';
+  el('ms-pdf').style.display=src==='pdf'?'':'none';
+}
+function loadMCSV(input) {
+  const file=input.files[0]; if(!file) return;
+  el('mc-zone').classList.add('has-file'); el('mc-title').textContent='✓ '+file.name;
+  if (file.name.endsWith('.csv')) { Papa.parse(file,{header:true,skipEmptyLines:true,complete:r=>{mCSV=r.data.map(row=>Object.values(row).join('\t')).join('\n');}});}
+  else {const rd=new FileReader();rd.onload=e=>{const wb=XLSX.read(e.target.result,{type:'array'});mCSV=XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]]);};rd.readAsArrayBuffer(file);}
+}
+async function loadMPDF(input) {
+  const file=input.files[0]; if(!file) return;
+  el('mp-zone').classList.add('has-file'); el('mp-title').textContent='⟳ Reading...';
+  try {
+    pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
+    const buf=await file.arrayBuffer();
+    const pdf=await pdfjsLib.getDocument({data:buf}).promise;
+    let text='';
+    for(let p=1;p<=pdf.numPages;p++){const pg=await pdf.getPage(p);const c=await pg.getTextContent();text+=c.items.map(i=>i.str).join(' ')+'\n';}
+    mPDF=text.replace(/\s{3,}/g,' ').trim();
+    el('mp-title').textContent='✓ '+file.name;
+    const prev=el('mp-preview'); prev.style.display=''; prev.textContent=mPDF.substring(0,400)+(mPDF.length>400?'...':'');
+  } catch(e) { el('mp-title').textContent='⚠ Could not read — try pasting'; }
+}
+
+// ── Multi-tab Excel upload ────────────────────────────────────────────────────
+async function loadMultiTab(input) {
+  const file = input.files[0]; if (!file) return;
+  el('mtz').classList.add('has-file');
+  el('mt-title').textContent = '⟳ Reading ' + file.name + '...';
+
+  try {
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, {type:'array', cellDates:true});
+    const sheets = wb.SheetNames;
+    const newPayments = [];
+
+    sheets.forEach(sheetName => {
+      const ws = wb.Sheets[sheetName];
+      const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:null, raw:true});
+      if (!rows||rows.length<2) return;
+
+      // Detect company from first row content
+      const row0 = rows[0].map(c=>String(c||'').toLowerCase());
+      const row0raw = rows[0];
+      let co = 'Rely Home Warranty'; // default for Rely Excel format
+      if (row0.some(c=>c.includes('rely'))) co = 'Rely Home Warranty';
+      else if (row0.some(c=>c.includes('first american')||c.includes('falcon'))) co = 'First American / FALCON';
+      else if (row0.some(c=>c.includes('lessen'))) co = 'Lessen';
+      else if (row0.some(c=>c.includes('cinch'))) co = 'Cinch Home Services';
+      else if (row0.some(c=>c.includes('frontdoor'))) co = 'Frontdoor';
+      else if (row0.some(c=>c.includes('rheem'))) co = 'Rheem';
+
+      // Extract check number and total from row 0
+      // Row 0 format: "View Payment | Rely Home" | null | null | null | date | "Check" | checkNum | total | company | cleared
+      let ref = '', amt = '';
+      row0raw.forEach((cell, idx) => {
+        if (String(cell||'').toLowerCase() === 'check') {
+          // Next cell is check number
+          if (row0raw[idx+1]) ref = String(row0raw[idx+1]);
+          // Cell after that is total
+          if (row0raw[idx+2]) amt = '$' + Number(row0raw[idx+2]).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+        }
+      });
+
+      // Fall back to sheet name as ref if not found
+      if (!ref) ref = sheetName;
+
+      // Build remittance as tab-separated Claim#	Amount
+      // Find header row (contains "Claim")
+      let headerIdx = -1;
+      rows.forEach((row, i) => {
+        if (row.some(c=>String(c||'').toLowerCase().includes('claim'))) headerIdx = i;
+      });
+
+      const dataRows = headerIdx >= 0 ? rows.slice(headerIdx+1) : rows.slice(2);
+      const remitLines = ['Claim #	Amount'];
+      dataRows.forEach(row => {
+        const claim = row[0];
+        const rawAmt = row[1];
+        if (!claim || rawAmt == null) return;
+        // Normalize: handles $-75.00, -$75.00, "$-75.00", plain numbers
+        const amtStr = String(rawAmt).replace(/[$,\s]/g,'').replace(/^-\$/, '-');
+        const amount = parseFloat(amtStr);
+        if (!isNaN(Number(claim)) && !isNaN(amount) && amount !== 0) {
+          remitLines.push(claim + '	' + amount);
+        }
+      });
+
+      if (remitLines.length <= 1) return; // no data rows
+
+      newPayments.push({
+        id: uid(),
+        co,
+        ref,
+        amt,
+        remit: remitLines.join('\n'),
+        src: 'csv',
+        fromSheet: sheetName
+      });
+    });
+
+    payments.push(...newPayments);
+    renderChips();
+    checkReady();
+
+    el('mt-title').textContent = '✓ ' + file.name;
+    const mts = el('mts');
+    mts.style.display = '';
+    mts.textContent = newPayments.length + ' payment' + (newPayments.length!==1?'s':'') + ' added from ' + sheets.length + ' tabs';
+
+  } catch(e) {
+    el('mt-title').textContent = '⚠ Error: ' + e.message;
+    console.error(e);
+  }
+  input.value = '';
+}
+
+function getRemit() {
+  if (modalSrc==='text') return el('m-remit').value.trim();
+  if (modalSrc==='csv') return mCSV||'';
+  if (modalSrc==='pdf') return mPDF||'';
+  return '';
+}
+function openModal() {
+  el('modal').style.display='flex';
+  el('m-remit').value=''; el('m-ref').value=''; el('m-amt').value=''; el('m-co').value='';
+  mCSV=null; mPDF=null;
+}
+function closeModal() { el('modal').style.display='none'; }
+function closeOut(e) { if(e.target.id==='modal') closeModal(); }
+function addPayment() {
+  const co=el('m-co').value, ref=el('m-ref').value.trim(), amt=el('m-amt').value.trim(), remit=getRemit();
+  if (!remit&&!co) { alert('Please add a remittance or select a company.'); return; }
+  payments.push({id:uid(), co, ref, amt, remit, src:modalSrc});
+  renderChips(); closeModal(); checkReady();
+}
+function removePayment(id) { payments=payments.filter(p=>p.id!==id); renderChips(); checkReady(); }
+function renderChips() {
+  el('plist').innerHTML = payments.map(p=>`
+    <div class="payment-chip">
+      <div class="payment-chip-info">
+        <div class="payment-chip-co">${p.co||'Payment'}</div>
+        <div class="payment-chip-detail">${p.ref?'Ref: '+p.ref:''}${p.amt?' · '+p.amt:''}${p.remit?' · ✓ remittance':''}</div>
+      </div>
+      <button class="payment-chip-remove" onclick="removePayment(${p.id})">×</button>
+    </div>`).join('');
+  if (payments.length>0) el('s3').classList.add('done');
+}
+function checkReady() { el('run-btn').disabled=!(jobberRows.length>0&&payments.length>0); }
+
+// ── CORE: Programmatic matching engine ───────────────────────────────────────
+function parseRemittance(remit, company) {
+  const lines = remit.split(/\n|\r/).map(l=>l.trim()).filter(Boolean);
+  const items = []; // [{ref, amount, secondary_ref}]
+
+  const co = (company||'').toLowerCase();
+
+  if (co.includes('first american')||co.includes('falcon')) {
+    // FALCON format: VendorInvoice FALCON# WorkOrder GrossAmt AdjAmt TotalAdj SvcFee Discount Other NetPaid
+    lines.forEach(line => {
+      // Match rows with numbers - work order is 3rd numeric column
+      const nums = line.match(/\d[\d,.]*/g);
+      if (!nums||nums.length<4) return;
+      // Work order is typically a 9-digit number starting with 621 or 622
+      const wo = nums.find(n=>n.replace(/,/g,'').match(/^6[12]\d{7}$/));
+      if (!wo) return;
+      const amt = parseFloat(nums[nums.length-1].replace(/,/g,''));
+      if (!isNaN(amt)&&amt>0) items.push({ref:wo, amount:amt, secondary_ref:nums[0]});
+    });
+  } else if (co.includes('rely')) {
+    // Rely: tab-separated, Claim # in col 0, Amount in col 1
+    // Format: "321688235\t$80.00" or "321688235\t-$75.00" for deductions
+    lines.forEach(line => {
+      const parts = line.split('\t').map(s=>s.trim());
+      if (parts.length < 2) return;
+      const claim = parts[0].replace(/\D/g,'');
+      if (!/^\d{8,12}$/.test(claim)) return; // skip header row
+      const amtStr = parts[1].replace(/[$,]/g,'');
+      const amt = parseFloat(amtStr);
+      if (isNaN(amt)) return;
+      if (amt < 0) {
+        items.push({ref:claim, amount:amt, isDeduction:true});
+      } else if (amt > 0) {
+        items.push({ref:claim, amount:amt});
+      }
+    });
+  } else if (co.includes('lessen')) {
+    // Lessen: work orders start with B, amounts in table
+    lines.forEach(line => {
+      const wo = line.match(/\b(B\d{7,10})\b/);
+      const amtMatch = line.match(/\$?([\d,]+\.?\d{2})/g);
+      if (wo&&amtMatch) {
+        const amt = parseFloat(amtMatch[amtMatch.length-1].replace(/[$,]/g,''));
+        if (!isNaN(amt)&&amt>0) items.push({ref:wo[1], amount:amt});
+      }
+    });
+  } else if (co.includes('cinch')) {
+    // Cinch: SCC reference in comments
+    lines.forEach(line => {
+      const scc = line.match(/\b(SCCV[A-Z0-9]+-\d+)\b/i);
+      const amt = line.match(/\$?([\d,]+\.?\d{2})/g);
+      if (scc&&amt) {
+        const a = parseFloat(amt[amt.length-1].replace(/[$,]/g,''));
+        if (!isNaN(a)&&a>0) items.push({ref:scc[1], amount:a});
+      }
+    });
+  } else if (co.includes('frontdoor')) {
+    // Frontdoor: Dispatch ID
+    const dispatchMatch = remit.match(/Dispatch\s+ID\s+(\d+)/i);
+    const amtMatch = remit.match(/Net\s+\$?([\d,]+\.?\d{2})/i)||remit.match(/Payment\s+Amount\s+\$?([\d,]+\.?\d{2})/i);
+    const payRef = remit.match(/Payment\s+#\s*E?-?(\d+)/i);
+    if (dispatchMatch&&amtMatch) {
+      items.push({ref:dispatchMatch[1], amount:parseFloat(amtMatch[1].replace(/,/g,'')), secondary_ref:payRef?payRef[1]:''});
+    }
+  } else if (co.includes('rheem')) {
+    // Rheem: Document Reference Number (WCN), may be comma-separated pairs
+    lines.forEach(line => {
+      const wcns = line.match(/\b(260\d{7,8})\b/g);
+      const amtMatch = line.match(/\$?([\d,]+\.?\d{2})/g);
+      if (wcns&&amtMatch) {
+        const amt = parseFloat(amtMatch[amtMatch.length-1].replace(/[$,]/g,''));
+        if (!isNaN(amt)&&amt>0) {
+          wcns.forEach(w => items.push({ref:w, amount:amt/wcns.length, secondary_ref:wcns.join(', ')}));
+        }
+      }
+    });
+  } else {
+    // Generic: extract any reference numbers and amounts
+    lines.forEach(line => {
+      const refs = line.match(/\b\d{6,12}\b/g);
+      const amts = line.match(/\$?([\d,]+\.\d{2})/g);
+      if (refs&&amts) {
+        const amt = parseFloat(amts[amts.length-1].replace(/[$,]/g,''));
+        if (!isNaN(amt)&&amt>0) items.push({ref:refs[0], amount:amt});
+      }
+    });
+  }
+  return items;
+}
+
+function lookupJobber(ref, company) {
+  const coLower = (company||'').toLowerCase();
+
+  // Helper: pick best row from candidates by client name match, then highest invoice #
+  function bestMatch(rows) {
+    if (!rows || rows.length === 0) return null;
+    if (rows.length === 1) return rows[0];
+    const coKeywords = coLower.split(/[\s\/\-]+/).filter(w => w.length > 3);
+    const clientMatch = rows.find(row => {
+      const client = String(row['Client name']||'').toLowerCase();
+      return coKeywords.some(kw => client.includes(kw));
+    });
+    if (clientMatch) return clientMatch;
+    // Fallback: highest (most recent) invoice number
+    return rows.reduce((best, row) =>
+      parseInt(row['Invoice #']||0) > parseInt(best['Invoice #']||0) ? row : best
+    );
+  }
+
+  // Direct subject match
+  if (jobberMap[ref]) return bestMatch(jobberMap[ref]);
+
+  // First American: try with 622/621 prefix variants
+  if (coLower.includes('first american')) {
+    if (jobberMap['622'+ref]) return bestMatch(jobberMap['622'+ref]);
+    if (jobberMap['621'+ref]) return bestMatch(jobberMap['621'+ref]);
+    const stripped = ref.replace(/^6[12]\d/, '');
+    if (stripped.length > 6 && jobberMap[stripped]) return bestMatch(jobberMap[stripped]);
+  }
+
+  // Case-insensitive fallback
+  const refLower = ref.toLowerCase();
+  for (const key of Object.keys(jobberMap)) {
+    if (!key.startsWith('inv:') && key.toLowerCase() === refLower) return bestMatch(jobberMap[key]);
+  }
+  return null;
+}
+
+function findBankMatch(payment) {
+  if (bankTxns.length===0) return null;
+  const amt = parseFloat(String(payment.amt||'0').replace(/[$,]/g,''));
+  const co = (payment.co||'').toLowerCase();
+
+  // Match by payment ID first (works for ACH payers like First American, Rheem etc.)
+  if (payment.ref) {
+    const found = bankTxns.find(t=>t.paymentId&&(t.paymentId===payment.ref||t.desc.includes(payment.ref)));
+    if (found) return fmtDate(found.date)+' · '+found.desc.substring(0,40)+' · '+fmt(found.amount);
+  }
+
+  // For Rely (and any payer whose checks arrive as plain mobile deposits),
+  // match purely by amount since the bank description has no company name
+  if (amt > 0) {
+    // Try company + amount first (works for ACH payers with name in description)
+    if (!co.includes('rely')) {
+      const byCoAmt = bankTxns.find(t=>Math.abs(t.amount-amt)<0.02&&t.co&&co.includes(t.co.toLowerCase()));
+      if (byCoAmt) return fmtDate(byCoAmt.date)+' · '+byCoAmt.desc.substring(0,40)+' · '+fmt(byCoAmt.amount);
+    }
+    // Amount-only match (covers Rely mobile deposits and any untagged payer)
+    const byAmt = bankTxns.find(t=>Math.abs(t.amount-amt)<0.02);
+    if (byAmt) return fmtDate(byAmt.date)+' · '+byAmt.desc.substring(0,40)+' · '+fmt(byAmt.amount);
+  }
+  return null;
+}
+
+// ── Main matching function ────────────────────────────────────────────────────
+function matchPayment(payment) {
+  const items = parseRemittance(payment.remit, payment.co);
+  const bankMatch = findBankMatch(payment);
+
+  const lineItems = items.map(item => {
+    const jobberRow = lookupJobber(item.ref, payment.co);
+
+    if (!jobberRow) {
+      return {
+        ref: item.ref,
+        secondary_ref: item.secondary_ref||'',
+        remittance_amount: item.amount,
+        jobber_invoice: null,
+        jobber_subject: null,
+        jobber_status: null,
+        jobber_amount: null,
+        difference: null,
+        status: item.isDeduction ? 'deduction' : 'missing',
+        note: item.isDeduction ? 'Deduction' : 'No matching invoice found in Jobber'
+      };
+    }
+
+    const invStatus = String(jobberRow['Status']||'').trim();
+    const jobberAmt = parseFloat(String(jobberRow['Total ($)']||'0').replace(/[$,]/g,''))||0;
+    const diff = Math.round((jobberAmt - Math.abs(item.amount))*100)/100;
+    const invNum = String(jobberRow['Invoice #']||'').trim();
+    const subject = String(jobberRow['Subject']||'').trim();
+
+    let status = 'match';
+    let note = 'Mark paid in Jobber';
+    if (item.isDeduction) { status='deduction'; note='Adjustment/deduction'; }
+    else if (invStatus === 'Draft') { status='draft'; note='Draft → send invoice & update date'; }
+    else if (diff > 0.01) { status='shortpay'; note='Short pay: paid '+fmt(Math.abs(item.amount))+' vs invoiced '+fmt(jobberAmt); }
+    else if (diff < -0.01) { status='overpay'; note='Over pay: paid '+fmt(Math.abs(item.amount))+' vs invoiced '+fmt(jobberAmt); }
+    else if (invStatus === 'Paid') { status='match'; note='Already paid in Jobber — confirm match'; }
+    else if (invStatus === 'Past Due' || invStatus === 'Awaiting Payment') { status='match'; note='Mark paid in Jobber'; }
+
+    return {
+      ref: item.ref,
+      secondary_ref: item.secondary_ref||'',
+      remittance_amount: item.amount,
+      jobber_invoice: invNum,
+      jobber_subject: subject,
+      jobber_status: invStatus,
+      jobber_amount: jobberAmt,
+      difference: diff,
+      status,
+      note
+    };
+  });
+
+  const totalPaid = lineItems.filter(i=>!i.isDeduction).reduce((s,i)=>s+Math.abs(i.remittance_amount||0),0);
+  const totalInvoiced = lineItems.filter(i=>i.jobber_amount).reduce((s,i)=>s+(i.jobber_amount||0),0);
+  const discrepancies = lineItems.filter(i=>i.status==='mismatch'||i.status==='missing').length;
+  const unresolved = lineItems.filter(i=>['missing','draft','mismatch'].includes(i.status));
+
+  return {
+    co: payment.co,
+    ref: payment.ref,
+    amt: payment.amt,
+    bank_match: bankMatch,
+    line_items: lineItems.sort((a,b)=>parseInt(a.jobber_invoice||0)-parseInt(b.jobber_invoice||0)),
+    total_paid: totalPaid,
+    total_invoiced: totalInvoiced,
+    discrepancies,
+    unresolved,
+    needs_ai: unresolved.length > 0 && items.length === 0 // no items parsed at all
+  };
+}
+
+// ── Run ───────────────────────────────────────────────────────────────────────
+async function run() {
+  const btn = el('run-btn');
+  btn.disabled=true; btn.textContent='⟳ Reconciling...';
+
+  el('results').innerHTML=`<div class="loading">
+    <div class="spinner"></div>
+    <div class="loading-text">Processing ${payments.length} payment${payments.length>1?'s':''}...</div>
+    <div class="loading-steps">
+      <div class="loading-step active" id="ls1">→ Parsing remittances</div>
+      <div class="loading-step" id="ls2">→ Matching to Jobber invoices</div>
+      <div class="loading-step" id="ls3">→ Resolving exceptions with AI</div>
+      <div class="loading-step" id="ls4">→ Building report</div>
+    </div>
+  </div>`;
+
+  await sleep(50);
+
+  // Step 1: Parse + match programmatically
+  setStep(1);
+  await sleep(100);
+  const results = payments.map(p => matchPayment(p));
+
+  // Step 2: Check if any need AI help
+  setStep(2);
+  await sleep(100);
+
+  const needsAI = results.filter(r => r.needs_ai || (r.line_items.length===0&&r.unresolved.length===0));
+
+  if (needsAI.length > 0) {
+    setStep(3);
+    try {
+      await resolveWithAI(needsAI, results);
+    } catch(e) {
+      console.warn('AI resolution failed, continuing with programmatic results:', e.message);
+    }
+  }
+
+  setStep(4);
+  await sleep(100);
+
+  window._lastResults = results;
+  renderReport(results);
+  btn.disabled=false; btn.textContent='▶ Run reconciliation';
+}
+
+function sleep(ms) { return new Promise(r=>setTimeout(r,ms)); }
+function setStep(n) {
+  for(let i=1;i<=4;i++){
+    const s=el('ls'+i);
+    if(!s)continue;
+    if(i<n)s.className='loading-step done';
+    else if(i===n)s.className='loading-step active';
+    else s.className='loading-step';
+  }
+}
+
+// AI fallback for payments where programmatic parsing found nothing
+async function resolveWithAI(needsAIResults, allResults) {
+  const apiKey = window._apiKey||'';
+  if (!apiKey) return;
+
+  const relevantInvoices = jobberRows.filter(r=>{
+    const s=(r['Status']||'').trim();
+    return s==='Past Due'||s==='Draft';
+  });
+  const jobberCtx = 'InvNum|Subject|Status|Amount\n'+
+    relevantInvoices.map(r=>`${(r['Invoice #']||'').trim()}|${(r['Subject']||'').trim()}|${(r['Status']||'').trim()}|${(r['Total ($)']||'').trim()}`).join('\n');
+
+  const paymentsCtx = needsAIResults.map((r,i)=>`PAYMENT ${i+1}: ${r.co} | Ref:${r.ref||'?'} | ${r.amt||'?'}\n${payments.find(p=>p.co===r.co&&p.ref===r.ref)?.remit||''}`).join('\n---\n');
+
+  const sys = `You are IntrepiPay. Match remittance line items to Jobber invoices.
+COMPANY RULES:
+- First American/FALCON: USE ONLY Work Order column (9-digit, 621/622 prefix). IGNORE Vendor Invoice and FALCON Invoice.
+- Rely: Claim # matches Subject directly
+- Lessen: WO# starts with B, matches Subject
+- Cinch: SCC# in Comments column (not CCCV number)
+- Frontdoor: Dispatch ID matches Subject
+- Rheem: Document Reference Number (WCN) matches Subject
+RESPOND ONLY VALID JSON:
+{"payments":[{"co":"","ref":"","line_items":[{"ref":"","remittance_amount":0,"jobber_invoice":"","jobber_subject":"","jobber_status":"","jobber_amount":0,"difference":0,"status":"pastdue|draft|missing|mismatch|deduction","note":""}],"total_paid":0,"total_invoiced":0}]}`;
+
+  const resp = await fetch('https://api.anthropic.com/v1/messages',{
+    method:'POST',
+    headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+    body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:8000,system:sys,messages:[{role:'user',content:`JOBBER:\n${jobberCtx}\n\nPAYMENTS:\n${paymentsCtx}`}]})
+  });
+
+  if (!resp.ok) return;
+  const data = await resp.json();
+  const raw = (data.content||[]).map(b=>b.text||'').join('');
+  try {
+    let clean=raw.trim();
+    const s=clean.indexOf('{'),e=clean.lastIndexOf('}');
+    if(s>=0&&e>s)clean=clean.substring(s,e+1);
+    const aiResult = JSON.parse(clean);
+    // Merge AI results back
+    (aiResult.payments||[]).forEach(ap=>{
+      const idx=allResults.findIndex(r=>r.co===ap.co&&r.ref===ap.ref);
+      if(idx>=0&&ap.line_items?.length>0){
+        allResults[idx].line_items=ap.line_items.sort((a,b)=>parseInt(a.jobber_invoice||0)-parseInt(b.jobber_invoice||0));
+        allResults[idx].total_paid=ap.total_paid||allResults[idx].total_paid;
+        allResults[idx].total_invoiced=ap.total_invoiced||allResults[idx].total_invoiced;
+      }
+    });
+  } catch(e) { console.warn('AI parse error:', e); }
+}
+
+// ── Render report ─────────────────────────────────────────────────────────────
+function renderReport(results) {
+  const totalPaid = results.reduce((s,r)=>s+(r.total_paid||0),0);
+  const totalInvoiced = results.reduce((s,r)=>s+(r.total_invoiced||0),0);
+  const totalDiscrepancies = results.reduce((s,r)=>s+(r.discrepancies||0),0);
+  const totalClaims = results.reduce((s,r)=>s+r.line_items.length,0);
+  const today = new Date().toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});
+
+  const blocks = results.map(r => {
+    const hasIssues = r.discrepancies>0;
+    const sorted = r.line_items;
+    return `
+    <div class="pblock">
+      <div class="pblock-head">
+        <div>
+          <div class="pblock-company">${r.co||'Payment'}</div>
+          <div class="pblock-meta">
+            ${r.ref?`<div class="pblock-meta-item">Ref <b>${r.ref}</b></div>`:''}
+            ${r.bank_match?`<div class="pblock-meta-item">🏦 <b>${r.bank_match}</b></div>`:'<div class="pblock-meta-item" style="color:var(--amber)">⚠ No bank match found</div>'}
+          </div>
+        </div>
+        <div class="pblock-right">
+          <div class="pblock-amount">${fmt(r.total_paid)}</div>
+          <div class="pblock-status" style="color:${r.total_paid===r.total_invoiced?'var(--green)':'var(--amber)'}">
+            ${r.total_paid===r.total_invoiced?'✓ Balanced':'⚠ Invoiced: '+fmt(r.total_invoiced)}
+          </div>
+        </div>
+      </div>
+      ${hasIssues?`<div class="pblock-warn">⚠ ${r.discrepancies} discrepanc${r.discrepancies===1?'y':'ies'} — review before applying payment</div>`:''}
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr>
+            <th>Claim / WO #</th>
+            <th>Invoice #</th>
+            <th>Invoice Status</th>
+            <th style="text-align:right">Paid ($)</th>
+            <th style="text-align:right">Invoiced ($)</th>
+            <th style="text-align:right">Diff ($)</th>
+            <th>Match</th>
+          </tr></thead>
+          <tbody>
+            ${sorted.map(i=>{
+              const diff = i.difference||0;
+              const rowCls = i.status==='missing'?'tr-missing':Math.abs(diff)>0.01?'tr-discrep':'';
+              const matchBadge = i.status==='missing'?'<span class="badge b-missing">✗ No Invoice</span>':
+                i.status==='draft'?'<span class="badge b-draft">⚠ Draft</span>':
+                i.status==='deduction'?'<span class="badge b-adjustment">⚠ Adjustment</span>':
+                i.status==='shortpay'?'<span class="badge b-shortpay">⚠ Short Pay</span>':
+                i.status==='overpay'?'<span class="badge b-overpay">⚠ Over Pay</span>':
+                '<span class="badge b-match">✓ Match</span>';
+              return `<tr class="${rowCls}">
+                <td style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--text-muted)">${i.ref||'—'}</td>
+                <td class="amt" style="font-weight:600">${i.jobber_invoice?'#'+i.jobber_invoice:'<span style="color:var(--text-muted)">—</span>'}</td>
+                <td>${i.jobber_status?`<span class="badge ${i.jobber_status==='Draft'?'b-draft':i.jobber_status==='Paid'?'b-match':i.jobber_status==='Past Due'?'b-shortpay':'b-pastdue'}">${i.jobber_status}</span>`:'<span style="color:var(--text-muted)">—</span>'}</td>
+                <td class="amt" style="text-align:right">${fmt(i.remittance_amount)}</td>
+                <td class="amt" style="text-align:right">${i.jobber_amount?fmt(i.jobber_amount):'—'}</td>
+                <td class="amt" style="text-align:right;color:${Math.abs(diff)>0.01?'var(--amber)':'var(--text-muted)'}">${Math.abs(diff)>0.01?fmt(Math.abs(diff)):'—'}</td>
+                <td>${matchBadge}</td>
+              </tr>`;
+            }).join('')}
+            <tr class="tr-total">
+              <td colspan="2">TOTALS · ${sorted.length} claims</td>
+              <td></td>
+              <td class="amt" style="text-align:right">${fmt(r.total_paid)}</td>
+              <td class="amt" style="text-align:right">${fmt(r.total_invoiced)}</td>
+              <td class="amt" style="text-align:right;color:var(--amber)">${Math.abs((r.total_invoiced||0)-(r.total_paid||0))>0.01?fmt(Math.abs((r.total_invoiced||0)-(r.total_paid||0))):'—'}</td>
+              <td>${r.total_paid===r.total_invoiced?'<span style="color:var(--green)">✅ Balanced</span>':'<span style="color:var(--amber)">⚠ Review</span>'}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+  }).join('');
+
+  const summaryBlock = `
+    <div class="pblock">
+      <div class="pblock-head"><div class="pblock-company">Summary</div></div>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>Check Ref #</th><th>Amount ($)</th><th>Bank Date</th><th>Bank Status</th><th style="text-align:right">Claims</th><th style="text-align:right">✓ Match</th><th style="text-align:right">⚠ Short Pay</th><th style="text-align:right">✗ No Invoice</th><th style="text-align:right">⚠ Draft</th></tr></thead>
+        <tbody>
+          ${results.map(r=>{
+            const matched=r.line_items.filter(i=>i.status==='match').length;
+            const shortpay=r.line_items.filter(i=>i.status==='shortpay'||i.status==='overpay').length;
+            const noInvoice=r.line_items.filter(i=>i.status==='missing').length;
+            const draft=r.line_items.filter(i=>i.status==='draft').length;
+            const bankParts=r.bank_match?r.bank_match.split(' · '):'';
+            const bankDate=bankParts?bankParts[0]:'Pending';
+            const bankStatus=r.bank_match?'<span style="color:var(--green)">✓ Cleared '+bankDate+'</span>':'<span style="color:var(--amber)">⚠ Pending</span>';
+            return`<tr>
+            <td class="amt" style="font-weight:600">${r.ref||'—'}</td>
+            <td class="amt" style="text-align:right">${fmt(r.total_paid)}</td>
+            <td style="font-size:11px;color:var(--text-muted)">${bankDate}</td>
+            <td style="font-size:11px">${bankStatus}</td>
+            <td class="amt" style="text-align:right">${r.line_items.length}</td>
+            <td class="amt" style="text-align:right;color:var(--green)">${matched}</td>
+            <td class="amt" style="text-align:right;color:${shortpay>0?'var(--amber)':'var(--text-muted)'}">${shortpay||'—'}</td>
+            <td class="amt" style="text-align:right;color:${noInvoice>0?'var(--red)':'var(--text-muted)'}">${noInvoice||'—'}</td>
+            <td class="amt" style="text-align:right;color:${draft>0?'var(--amber)':'var(--text-muted)'}">${draft||'—'}</td>
+          </tr>`;}).join('')}
+          <tr class="tr-total">
+            <td>GRAND TOTAL</td>
+            <td class="amt" style="text-align:right">${fmt(totalPaid)}</td>
+            <td></td><td></td>
+            <td class="amt" style="text-align:right">${totalClaims}</td>
+            <td class="amt" style="text-align:right;color:var(--green)">${results.reduce((s,r)=>s+r.line_items.filter(i=>i.status==="match").length,0)}</td>
+            <td class="amt" style="text-align:right;color:var(--amber)">${results.reduce((s,r)=>s+r.line_items.filter(i=>['shortpay','overpay'].includes(i.status)).length,0)||'—'}</td>
+            <td class="amt" style="text-align:right;color:var(--red)">${results.reduce((s,r)=>s+r.line_items.filter(i=>i.status==='missing').length,0)||'—'}</td>
+            <td class="amt" style="text-align:right;color:var(--amber)">${results.reduce((s,r)=>s+r.line_items.filter(i=>i.status==='draft').length,0)||'—'}</td>
+          </tr>
+        </tbody>
+      </table></div>
+    </div>`;
+
+  el('results').innerHTML = `
+    <div class="report-header">
+      <div>
+        <div class="report-title">Payment Reconciliation</div>
+        <div class="report-subtitle">${results.length} payment${results.length!==1?'s':''} · ${totalClaims} claims · ${today}</div>
+      </div>
+      <div class="export-btns">
+        <button class="btn btn-outline" onclick="exportRecon()">↓ Reconciliation report</button>
+        <button class="btn btn-primary" onclick="exportBilling()">↓ Billing actions</button>
+      </div>
+    </div>
+    <div class="summary-bar">
+      <div class="summary-card"><div class="sc-label">Total paid</div><div class="sc-value teal">${fmt(totalPaid)}</div><div class="sc-sub">${results.length} payments</div></div>
+      <div class="summary-card"><div class="sc-label">Total invoiced</div><div class="sc-value">${fmt(totalInvoiced)}</div><div class="sc-sub">${totalClaims} claims</div></div>
+      <div class="summary-card"><div class="sc-label">Discrepancies</div><div class="sc-value ${totalDiscrepancies>0?'amber':'green'}">${totalDiscrepancies}</div><div class="sc-sub">${totalDiscrepancies>0?'need review':'all clean'}</div></div>
+      <div class="summary-card"><div class="sc-label">Missing invoices</div><div class="sc-value ${results.reduce((s,r)=>s+r.line_items.filter(i=>i.status==='missing').length,0)>0?'red':'green'}">${results.reduce((s,r)=>s+r.line_items.filter(i=>i.status==='missing').length,0)}</div><div class="sc-sub">${results.reduce((s,r)=>s+r.line_items.filter(i=>i.status==='missing').length,0)>0?'create in Jobber':'all found'}</div></div>
+    </div>
+    ${blocks}
+    ${summaryBlock}`;
+}
+
+// ── Exports ───────────────────────────────────────────────────────────────────
+function exportRecon() {
+  if (!window._lastResults) return;
+  const results = window._lastResults;
+  const wb = XLSX.utils.book_new();
+  const today = new Date().toLocaleDateString('en-US',{month:'numeric',day:'numeric',year:'numeric'});
+  const totalClaims = results.reduce((s,r)=>s+r.line_items.length,0);
+
+  // Summary tab
+  const sumRows = [
+    ['TB Plumbing — Payment Reconciliation Summary'],
+    ['Invoices as of '+today+' | '+results.length+' Payments | '+totalClaims+' Total Claims'],
+    [],
+    ['Check Ref#','Amount ($)','Bank Date','Bank Status','Claims','✓ Match','⚠ Short Pay','✗ No Invoice','⚠ Draft'],
+    ...results.map(r=>{
+      const bankParts=r.bank_match?r.bank_match.split(' · '):[''];
+      return [r.ref||'',r.total_paid||0,bankParts[0]||'Pending',r.bank_match?'✓ Cleared':'⚠ Pending',
+        r.line_items.length,
+        r.line_items.filter(i=>i.status==='match').length,
+        r.line_items.filter(i=>['shortpay','overpay'].includes(i.status)).length||0,
+        r.line_items.filter(i=>i.status==='missing').length||0,
+        r.line_items.filter(i=>i.status==='draft').length||0];
+    }),
+    [],
+    ['GRAND TOTAL',results.reduce((s,r)=>s+(r.total_paid||0),0),'','',totalClaims,
+      results.reduce((s,r)=>s+r.line_items.filter(i=>i.status==='match').length,0),
+      results.reduce((s,r)=>s+r.line_items.filter(i=>['shortpay','overpay'].includes(i.status)).length,0),
+      results.reduce((s,r)=>s+r.line_items.filter(i=>i.status==='missing').length,0),
+      results.reduce((s,r)=>s+r.line_items.filter(i=>i.status==='draft').length,0)],
+  ];
+  const sumWS = XLSX.utils.aoa_to_sheet(sumRows);
+  sumWS['!cols']=[{wch:14},{wch:25},{wch:20},{wch:12},{wch:16},{wch:18},{wch:8},{wch:14}];
+  XLSX.utils.book_append_sheet(wb, sumWS, 'Summary');
+
+  // One tab per payment
+  results.forEach(r => {
+    const discr = r.line_items.filter(i=>i.status==='mismatch'||i.status==='missing').length;
+    const rows = [
+      [(r.co||'Payment')+' — '+(r.ref?'Ref# '+r.ref:'')],
+      ['Ref# '+(r.ref||'')+'  |  '+today+'  |  Cleared: '+(r.bank_match||'Pending')+'  |  Total: $'+Number(r.total_paid||0).toLocaleString()+'  |  '+r.line_items.length+' Claims'],
+    ];
+    if (discr>0) rows.push(['⚠  '+discr+' claim(s) with discrepancies or missing invoices']);
+    rows.push([]);
+    rows.push(['Claim #','Invoice #','Invoice Status','Amount Paid ($)','Amount Invoiced ($)','Difference ($)','Match']);
+    r.line_items.forEach(i=>{
+      const diff = i.difference||0;
+      const matchMap={missing:'✗ No Invoice',draft:'⚠ Draft',shortpay:'⚠ Short Pay',overpay:'⚠ Over Pay',deduction:'⚠ Adjustment',match:'✓ Match'};
+      const match = matchMap[i.status]||'✓ Match';
+      rows.push([i.ref||'',i.jobber_invoice?'#'+i.jobber_invoice:'—',i.jobber_status||'—',i.remittance_amount||0,i.jobber_amount||0,diff||0,match]);
+    });
+    rows.push([]);
+    rows.push(['TOTALS','','',r.total_paid||0,r.total_invoiced||0,(r.total_invoiced||0)-(r.total_paid||0),'']);
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws['!cols']=[{wch:14},{wch:12},{wch:14},{wch:16},{wch:18},{wch:14},{wch:14}];
+    const tabName = (r.ref?'Check '+r.ref:r.co||'Payment').substring(0,28);
+    XLSX.utils.book_append_sheet(wb, ws, tabName);
+  });
+
+  XLSX.writeFile(wb, 'IntrepiPay-Reconciliation-'+new Date().toISOString().split('T')[0]+'.xlsx');
+}
+
+function exportBilling() {
+  if (!window._lastResults) return;
+  const results = window._lastResults;
+  const wb = XLSX.utils.book_new();
+  const today = new Date().toLocaleDateString('en-US',{month:'numeric',day:'numeric',year:'numeric'});
+
+  // Collect all issues across all checks, grouped by type
+  const groups = {
+    missing:  { label: 'MISSING INVOICES',  action: 'No matching invoice found in Jobber — create a Rely Home invoice for this claim', items: [] },
+    draft:    { label: 'DRAFT INVOICES',     action: 'Invoice is in Draft — fix and send in Jobber before payment can be applied', items: [] },
+    shortpay: { label: 'SHORT PAYS',         action: 'Rely paid less than invoiced — adjust the invoice OR contact Rely for additional payment', items: [] },
+    overpay:  { label: 'OVER PAYS',          action: 'Rely paid more than invoiced — adjust the invoice down to match the payment', items: [] },
+  };
+
+  results.forEach(r => {
+    r.line_items.forEach(i => {
+      if (!groups[i.status]) return;
+      groups[i.status].items.push({
+        claim: i.ref || '—',
+        invoice: i.jobber_invoice ? '#'+i.jobber_invoice : '—',
+        paid: i.remittance_amount,
+        invoiced: i.jobber_amount,
+        diff: i.difference,
+      });
+    });
+  });
+
+  const totalIssues = Object.values(groups).reduce((s,g)=>s+g.items.length, 0);
+
+  const rows = [
+    ['Billing Action Items'],
+    ['Generated '+today],
+    [],
+  ];
+
+  if (totalIssues === 0) {
+    rows.push(['✓ No discrepancies found — all claims matched cleanly.']);
+  } else {
+    // Render each group in priority order
+    ['missing','draft','shortpay','overpay'].forEach(key => {
+      const g = groups[key];
+      if (!g.items.length) return;
+
+      rows.push([g.label + ' ('+g.items.length+')']);
+      rows.push(['Action: '+g.action]);
+      rows.push([]);
+      rows.push(['Claim #', 'Invoice #', ...(key==='shortpay'||key==='overpay'?['Paid ($)','Invoiced ($)','Difference ($)']:[])]);
+
+      g.items.forEach(i => {
+        if (key==='shortpay'||key==='overpay') {
+          rows.push([i.claim, i.invoice, i.paid||'—', i.invoiced||'—', i.diff||'—']);
+        } else {
+          rows.push([i.claim, i.invoice]);
+        }
+      });
+
+      rows.push([]); // spacer between groups
+      rows.push([]);
+    });
+
+    rows.push(['TOTAL ISSUES: '+totalIssues]);
+  }
+
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = [{wch:16},{wch:14},{wch:14},{wch:16},{wch:14}];
+  XLSX.utils.book_append_sheet(wb, ws, 'Billing Actions');
+  XLSX.writeFile(wb, 'IntrepiPay-BillingActions-'+new Date().toISOString().split('T')[0]+'.xlsx');
+}
+
+// ── API Key ───────────────────────────────────────────────────────────────────
+function manageKey() {
+  const cur = window._apiKey;
+  const key = prompt(cur?'API key is set. Paste new key to replace, or cancel:':'Enter your Anthropic API key:\n(Stored locally — never shared)', cur?'(key saved)':'');
+  if (key&&(key.includes('sk-ant')||key.startsWith('sk-'))) {
+    window._apiKey=key.trim(); localStorage.setItem('ip_key',key.trim());
+    el('key-btn').textContent='🔑 Key ✓'; el('key-btn').style.color='#00c9a7';
+  } else if (key) { alert('Invalid API key.'); }
+}
+window._apiKey = localStorage.getItem('ip_key')||'';
+if (window._apiKey) { setTimeout(()=>{ el('key-btn').textContent='🔑 Key ✓'; el('key-btn').style.color='#00c9a7'; },100); }
+</script>
+</body>
+</html>
