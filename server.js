@@ -124,8 +124,9 @@ app.get('/api/invoices', async (req, res) => {
     let hasNextPage = true;
     let cursor = null;
     let pageCount = 0;
-
-    while (hasNextPage && pageCount < 10) {
+    let stopFetching = false;
+    
+    while (hasNextPage && pageCount < 20 && !stopFetching) {
       const afterClause = cursor ? `(after: "${cursor}")` : '';
       const query = `{
         invoices${afterClause} {
@@ -168,6 +169,9 @@ app.get('/api/invoices', async (req, res) => {
       hasNextPage = page.pageInfo.hasNextPage;
       cursor = page.pageInfo.endCursor;
       pageCount++;
+
+      const lastInv = page.nodes[page.nodes.length - 1];
+      if (lastInv && parseInt(lastInv.invoiceNumber) < 14900) stopFetching = true;
 
       console.log(`Page ${pageCount}: ${page.nodes.length} invoices, hasNextPage: ${hasNextPage}, total: ${allInvoices.length}`);
     }
