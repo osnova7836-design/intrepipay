@@ -393,13 +393,6 @@ window.addEventListener('DOMContentLoaded', async () => {
   if (params.get('connected') === 'true') {
     history.replaceState({}, '', '/');
     await fetchJobberInvoices();
-  } else {
-    // Check if already connected
-    try {
-      const resp = await fetch('/api/status');
-      const status = await resp.json();
-      if (status.connected) await fetchJobberInvoices();
-    } catch(e) {}
   }
 });
 
