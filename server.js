@@ -16,12 +16,25 @@ const REDIRECT_URI = `${APP_URL}/auth/jobber/callback`;
 const TOKEN_URL = 'https://api.getjobber.com/api/oauth/token';
 const GRAPHQL_URL = 'https://api.getjobber.com/api/graphql';
 
-// In-memory token store (one tenant for now — multi-tenant comes later)
-let tokenStore = {
-  access_token: null,
-  refresh_token: null,
-  expires_at: null
-};
+const fs = require('fs');
+const TOKEN_FILE = path.join(__dirname, 'tokens.json');
+
+function loadTokens() {
+  try {
+    if (fs.existsSync(TOKEN_FILE)) {
+      return JSON.parse(fs.readFileSync(TOKEN_FILE, 'utf8'));
+    }
+  } catch (e) { console.error('Token load error:', e.message); }
+  return { access_token: null, refresh_token: null, expires_at: null };
+}
+
+function saveTokens(tokens) {
+  try {
+    fs.writeFileSync(TOKEN_FILE, JSON.stringify(tokens));
+  } catch (e) { console.error('Token save error:', e.message); }
+}
+
+let tokenStore = loadTokens();
 
 // ── Step 1: Send user to Jobber to authorize ──────────────────────────────────
 app.get('/auth/jobber', (req, res) => {
@@ -64,7 +77,7 @@ app.get('/auth/jobber/callback', async (req, res) => {
       refresh_token: data.refresh_token,
       expires_at: Date.now() + (data.expires_in * 1000)
     };
-
+    saveTokens(tokenStore);
     console.log('Jobber connected successfully');
     res.redirect('/?connected=true');
 
@@ -95,6 +108,7 @@ async function getValidToken() {
       refresh_token: data.refresh_token,
       expires_at: Date.now() + (data.expires_in * 1000)
     };
+    saveTokens(tokenStore);
   }
 
   return tokenStore.access_token;
