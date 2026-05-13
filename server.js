@@ -126,8 +126,9 @@ app.get('/api/invoices', async (req, res) => {
     let pageCount = 0;
 
     while (hasNextPage && pageCount < 10) {
+      const afterClause = cursor ? `(after: "${cursor}")` : '';
       const query = `{
-        invoices(${cursor ? `after: "${cursor}"` : ''}) {
+        invoices${afterClause} {
           nodes {
             invoiceNumber
             subject
