@@ -1303,9 +1303,9 @@ async function applyAll(ref, co, btn) {
 
   if (matchedItems.length === 0) return;
 
-  // Build clipboard text
-  const clipText = `Payment Ref: ${ref}\nDate: ${paymentDate}\nAmount: ${fmt(result.total_paid)}\n\nInvoices:\n` +
-    matchedItems.map(i => `#${i.jobber_invoice} — ${fmt(i.remittance_amount)}`).join('\n');
+  // Format for Jobber Details box
+  const invoiceNums = matchedItems.map(i => '#' + i.jobber_invoice).join(', ');
+  const clipText = `Ref: ${ref} | Date: ${paymentDate}\nInvoices: ${invoiceNums}`;
 
   // Copy to clipboard
   try {
@@ -1314,50 +1314,51 @@ async function applyAll(ref, co, btn) {
     console.warn('Clipboard copy failed:', e);
   }
 
-  // Open first invoice in Jobber
+  // Open first invoice in Jobber in new tab
   const firstItem = matchedItems[0];
   const firstRow = jobberRows.find(r => String(r['Invoice #']).trim() === String(firstItem.jobber_invoice).trim());
-  if (firstRow?.jobberWebUri) {
-    window.open(firstRow.jobberWebUri, '_blank');
-  }
+  setTimeout(() => {
+    if (firstRow?.jobberWebUri) window.open(firstRow.jobberWebUri, '_blank');
+  }, 100);
 
   // Show checklist popup
   const invoiceList = matchedItems.map(i =>
     `<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);font-family:'IBM Plex Mono',monospace;font-size:11px">
-      <span style="color:var(--text-dim)">#${i.jobber_invoice}</span>
-      <span style="color:var(--text-muted)">${i.jobber_subject||''}</span>
+      <span style="color:var(--text-dim);font-weight:600">#${i.jobber_invoice}</span>
+      <span style="color:var(--text-muted);font-size:10px">${i.jobber_subject||''}</span>
       <span style="color:var(--teal);font-weight:600">${fmt(i.remittance_amount)}</span>
     </div>`
   ).join('');
 
-  // Create modal
   const overlay = document.createElement('div');
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:200;display:flex;align-items:center;justify-content:center;padding:1rem';
+  overlay.classList.add('apply-overlay');
   overlay.innerHTML = `
     <div style="background:var(--surface);border-radius:12px;padding:1.5rem;width:100%;max-width:480px;max-height:80vh;overflow-y:auto;box-shadow:0 8px 24px rgba(0,0,0,0.15)">
       <div style="font-family:'Playfair Display',serif;font-size:20px;margin-bottom:.25rem">Apply Payment</div>
       <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--text-muted);margin-bottom:1rem">
         Ref: <b style="color:var(--text-dim)">${ref}</b> · Date: <b style="color:var(--text-dim)">${paymentDate}</b> · ${fmt(result.total_paid)}
       </div>
-      <div style="background:var(--teal-bg);border:1px solid var(--teal-border);border-radius:8px;padding:.75rem;margin-bottom:1rem;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--teal)">
-        ✓ Payment details copied to clipboard — paste into Jobber's collect payment screen
+      <div style="background:var(--teal-bg);border:1px solid var(--teal-border);border-radius:8px;padding:.75rem;margin-bottom:.75rem;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--teal)">
+        ✓ Copied to clipboard — paste into Jobber's Details box
+      </div>
+      <div style="background:var(--surface2);border-radius:6px;padding:.75rem;margin-bottom:1rem;font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--text-dim);word-break:break-all">
+        Ref: ${ref} | Date: ${paymentDate}<br>Invoices: ${invoiceNums}
       </div>
       <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:.5rem">
         Select these ${matchedItems.length} invoices in Jobber:
       </div>
       ${invoiceList}
       <div style="display:flex;gap:8px;margin-top:1rem;justify-content:flex-end">
-        <button onclick="this.closest('.apply-overlay').remove()" 
+        <button onclick="this.closest('.apply-overlay').remove()"
           style="padding:8px 16px;border-radius:6px;font-family:'IBM Plex Mono',monospace;font-size:11px;cursor:pointer;border:1px solid var(--border-strong);background:none;color:var(--text-dim)">
           Done
         </button>
       </div>
     </div>`;
-  overlay.classList.add('apply-overlay');
   overlay.addEventListener('click', e => { if(e.target === overlay) overlay.remove(); });
   document.body.appendChild(overlay);
 }
-
 </script>
 </body>
 </html>
