@@ -27,7 +27,11 @@ body{background:var(--bg);color:var(--text);font-family:'IBM Plex Sans',sans-ser
 .header-right{display:flex;align-items:center;gap:10px}
 .key-btn{background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);color:rgba(255,255,255,0.6);font-family:'IBM Plex Mono',monospace;font-size:10px;padding:4px 10px;border-radius:4px;cursor:pointer;letter-spacing:0.05em}
 .main{display:grid;grid-template-columns:340px 1fr;min-height:calc(100vh - 68px)}
-
+.btn-jobber{width:100%;padding:12px;border-radius:8px;background:var(--teal);color:#fff;font-family:'IBM Plex Mono',monospace;font-size:11px;cursor:pointer;border:none;letter-spacing:0.08em;text-transform:uppercase;display:flex;align-items:center;justify-content:center;gap:8px;transition:background 0.15s}
+.btn-jobber:hover{background:var(--teal-light)}
+.btn-jobber.connected{background:var(--green)}
+.btn-jobber.loading{opacity:0.6;cursor:not-allowed}
+  
 /* Panel */
 .panel{background:var(--surface);border-right:1px solid var(--border);padding:1.5rem;display:flex;flex-direction:column;gap:1.25rem;overflow-y:auto}
 .step-header{display:flex;align-items:center;gap:10px;margin-bottom:.625rem}
