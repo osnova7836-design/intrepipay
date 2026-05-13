@@ -165,18 +165,18 @@ tr:hover td{background:var(--surface2)}
   <aside class="panel">
 
     <div>
-      <div class="step-header">
-        <div class="step-num" id="s1">1</div>
-        <div class="step-title">Jobber invoice export</div>
-      </div>
-      <div class="upload-zone" id="jz">
-        <input type="file" accept=".csv" onchange="loadJobber(this)">
-        <div class="uz-icon">💼</div>
-        <div class="uz-title" id="jt">Drop Jobber invoice CSV</div>
-        <div class="uz-sub">All invoices · all statuses</div>
-      </div>
-      <div class="status-line" id="js"></div>
-    </div>
+  <div class="step-header">
+    <div class="step-num" id="s1">1</div>
+    <div class="step-title">Jobber connection</div>
+  </div>
+  <div id="jobber-connect-zone">
+    <button class="btn-jobber" id="jobber-btn" onclick="connectJobber()">
+      <span id="jobber-btn-icon">🔗</span>
+      <span id="jobber-btn-text">Connect Jobber</span>
+    </button>
+  </div>
+  <div class="status-line" id="js"></div>
+</div>
 
     <div class="divider"></div>
 
@@ -303,11 +303,55 @@ const uid = () => Date.now()+Math.random();
 const el = id => document.getElementById(id);
 
 // ── Step 1: Jobber ────────────────────────────────────────────────────────────
-function loadJobber(input) {
-  const file = input.files[0]; if (!file) return;
-  Papa.parse(file, {header:true, skipEmptyLines:true, complete: r => {
-    jobberRows = r.data;
-    // Build lookup map: subject -> array of rows (there can be duplicates across clients)
+async function connectJobber() {
+  const btn = el('jobber-btn');
+  btn.classList.add('loading');
+  el('jobber-btn-text').textContent = 'Connecting...';
+
+  try {
+    const resp = await fetch('/api/status');
+    const status = await resp.json();
+
+    if (!status.connected) {
+      // Not connected — send to OAuth
+      window.location.href = '/auth/jobber';
+      return;
+    }
+
+    // Already connected — fetch invoices
+    await fetchJobberInvoices();
+
+  } catch(e) {
+    el('jobber-btn-text').textContent = 'Connect Jobber';
+    btn.classList.remove('loading');
+    alert('Connection error: ' + e.message);
+  }
+}
+
+async function fetchJobberInvoices() {
+  const btn = el('jobber-btn');
+  el('jobber-btn-text').textContent = 'Loading invoices...';
+
+  try {
+    const resp = await fetch('/api/invoices');
+    const invoices = await resp.json();
+
+    if (invoices.error) {
+      // Token expired — reconnect
+      window.location.href = '/auth/jobber';
+      return;
+    }
+
+    // Build jobberRows and jobberMap from API response
+    jobberRows = invoices.map(inv => ({
+      'Invoice #': inv.invoiceNumber,
+      'Subject': (inv.subject||'').trim(),
+      'Status': inv.invoiceStatus,
+      'Total ($)': inv.total,
+      'Client name': inv.client?.name || '',
+      'jobberWebUri': inv.jobberWebUri
+    }));
+
     jobberMap = {};
     jobberRows.forEach(row => {
       const subj = String(row['Subject']||'').trim();
@@ -318,15 +362,42 @@ function loadJobber(input) {
       }
       if (inv) jobberMap['inv:'+inv] = [row];
     });
-    el('jz').classList.add('has-file');
-    el('jt').textContent = '✓ ' + file.name;
-    const pd = jobberRows.filter(r=>(r['Status']||'').trim()==='Past Due').length;
-    const dr = jobberRows.filter(r=>(r['Status']||'').trim()==='Draft').length;
-    const js = el('js'); js.style.display=''; js.textContent = `${jobberRows.length} invoices · ${pd} past due · ${dr} draft`;
+
+    const pd = jobberRows.filter(r=>r['Status']==='past_due').length;
+    const dr = jobberRows.filter(r=>r['Status']==='draft').length;
+    const js = el('js');
+    js.style.display='';
+    js.textContent = `${jobberRows.length} invoices · ${pd} past due · ${dr} draft`;
+
+    btn.classList.remove('loading');
+    btn.classList.add('connected');
+    el('jobber-btn-icon').textContent = '✓';
+    el('jobber-btn-text').textContent = 'Jobber Connected — ' + jobberRows.length + ' invoices';
     el('s1').classList.add('done');
-    input.value=''; checkReady();
-  }});
+    checkReady();
+
+  } catch(e) {
+    el('jobber-btn-text').textContent = 'Connect Jobber';
+    btn.classList.remove('loading');
+    alert('Failed to load invoices: ' + e.message);
+  }
 }
+
+// Auto-load invoices if returning from OAuth
+window.addEventListener('DOMContentLoaded', async () => {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('connected') === 'true') {
+    history.replaceState({}, '', '/');
+    await fetchJobberInvoices();
+  } else {
+    // Check if already connected
+    try {
+      const resp = await fetch('/api/status');
+      const status = await resp.json();
+      if (status.connected) await fetchJobberInvoices();
+    } catch(e) {}
+  }
+});
 
 // ── Step 2: Bank ──────────────────────────────────────────────────────────────
 async function loadBank(input) {
