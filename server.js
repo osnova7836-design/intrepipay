@@ -126,9 +126,7 @@ app.get('/api/invoices', async (req, res) => {
     let pageCount = 0;
 
     while (hasNextPage && pageCount < 10) {
-      const afterClause = cursor
-        ? `(after: "${cursor}", filter: { createdAt: { gte: "2025-01-01T00:00:00Z" } })`
-        : `(filter: { createdAt: { gte: "2025-01-01T00:00:00Z" } })`;
+      const afterClause = cursor ? `(after: "${cursor}")` : '';
       const query = `{
         invoices${afterClause} {
           nodes {
