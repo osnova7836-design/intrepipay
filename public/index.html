@@ -1269,31 +1269,23 @@ async function applyOne(invoiceNumber, amount, btn) {
   const paymentDate = dateInput ? dateInput.value : todayISO();
   const ref = block.querySelector('.pblock-meta-item b')?.textContent || '';
 
-  if (!confirm(`Apply $${amount} to Invoice #${invoiceNumber}?\nDate: ${paymentDate}\nRef: ${ref}`)) return;
-
-  btn.disabled = true;
-  btn.textContent = '⟳';
-
+  // Copy payment details to clipboard
+  const clipText = `Payment Ref: ${ref}\nDate: ${paymentDate}\nAmount: ${fmt(parseFloat(amount))}\nInvoice: #${invoiceNumber}`;
   try {
-    const resp = await fetch('/api/apply-payment', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ invoiceNumber, amount: parseFloat(amount), paymentRef: ref, paymentDate })
-    });
-    const data = await resp.json();
-    if (data.success) {
-      btn.textContent = '✓';
-      btn.style.color = 'var(--green)';
-      btn.style.borderColor = 'var(--green)';
-    } else {
-      btn.textContent = '✗ Error';
-      btn.disabled = false;
-      alert('Error: ' + (data.error || 'Unknown error'));
-    }
+    await navigator.clipboard.writeText(clipText);
   } catch(e) {
-    btn.textContent = '✗';
-    btn.disabled = false;
-    alert('Error: ' + e.message);
+    console.warn('Clipboard copy failed:', e);
+  }
+
+  // Open invoice in Jobber
+  const row = jobberRows.find(r => String(r['Invoice #']).trim() === String(invoiceNumber).trim());
+  if (row?.jobberWebUri) {
+    window.open(row.jobberWebUri, '_blank');
+    btn.textContent = '✓ Opened';
+    btn.style.color = 'var(--green)';
+    btn.style.borderColor = 'var(--green)';
+  } else {
+    alert('Could not find Jobber URL for invoice #' + invoiceNumber);
   }
 }
 
