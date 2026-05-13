@@ -188,6 +188,140 @@ app.get('/api/invoices', async (req, res) => {
   }
 });
 
+// ── Apply payment to invoice in Jobber ────────────────────────────────────────
+app.post('/api/apply-payment', async (req, res) => {
+  try {
+    const token = await getValidToken();
+    const { invoiceNumber, amount, paymentRef, paymentDate } = req.body;
+
+    if (!invoiceNumber || !amount) {
+      return res.status(400).json({ error: 'invoiceNumber and amount required' });
+    }
+
+    // Look up invoice ID by invoice number
+    const lookupQuery = `{
+      invoices(filter: { invoiceNumber: { eq: ${invoiceNumber} } }) {
+        nodes {
+          id
+          invoiceNumber
+          total
+          invoiceStatus
+        }
+      }
+    }`;
+
+    const lookupResp = await fetch(GRAPHQL_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+        'X-JOBBER-GRAPHQL-VERSION': '2025-04-16'
+      },
+      body: JSON.stringify({ query: lookupQuery })
+    });
+
+    const lookupData = await lookupResp.json();
+
+    if (lookupData.errors) {
+      return res.status(400).json({ error: lookupData.errors });
+    }
+
+    const invoice = lookupData.data?.invoices?.nodes?.[0];
+    if (!invoice) {
+      return res.status(404).json({ error: `Invoice #${invoiceNumber} not found` });
+    }
+
+    // Apply payment via mutation
+    const mutation = `mutation {
+      invoicePaymentCreate(input: {
+        invoiceId: "${invoice.id}"
+        amount: ${amount}
+        paidAt: "${paymentDate}"
+        details: "${paymentRef || ''}"
+      }) {
+        invoicePayment {
+          id
+          amount
+        }
+        userErrors {
+          message
+          path
+        }
+      }
+    }`;
+
+    const mutResp = await fetch(GRAPHQL_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+        'X-JOBBER-GRAPHQL-VERSION': '2025-04-16'
+      },
+      body: JSON.stringify({ query: mutation })
+    });
+
+    const mutData = await mutResp.json();
+
+    if (mutData.errors) {
+      return res.status(400).json({ error: mutData.errors });
+    }
+
+    const userErrors = mutData.data?.invoicePaymentCreate?.userErrors;
+    if (userErrors?.length > 0) {
+      return res.status(400).json({ error: userErrors.map(e => e.message).join(', ') });
+    }
+
+    console.log(`Payment applied: Invoice #${invoiceNumber} · $${amount} · Ref: ${paymentRef} · Date: ${paymentDate}`);
+    res.json({ success: true, invoiceNumber, amount });
+
+  } catch (err) {
+    console.error('Apply payment error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Apply all payments in a check ─────────────────────────────────────────────
+app.post('/api/apply-all-payments', async (req, res) => {
+  try {
+    const { lineItems, paymentRef, paymentDate } = req.body;
+
+    if (!lineItems || lineItems.length === 0) {
+      return res.status(400).json({ error: 'No line items provided' });
+    }
+
+    const results = [];
+    for (const item of lineItems) {
+      try {
+        const resp = await fetch(`http://localhost:${process.env.PORT || 3000}/api/apply-payment`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            invoiceNumber: item.invoiceNumber,
+            amount: item.amount,
+            paymentRef,
+            paymentDate
+          })
+        });
+        const data = await resp.json();
+        results.push({ invoiceNumber: item.invoiceNumber, ...data });
+        // Small delay to avoid rate limiting
+        await new Promise(r => setTimeout(r, 300));
+      } catch (e) {
+        results.push({ invoiceNumber: item.invoiceNumber, error: e.message });
+      }
+    }
+
+    const succeeded = results.filter(r => r.success).length;
+    const failed = results.filter(r => r.error).length;
+    console.log(`Apply all complete: ${succeeded} succeeded, ${failed} failed`);
+    res.json({ results, succeeded, failed });
+
+  } catch (err) {
+    console.error('Apply all error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Connection status ─────────────────────────────────────────────────────────
 app.get('/api/status', (req, res) => {
   res.json({
