@@ -166,6 +166,8 @@ app.get('/api/invoices', async (req, res) => {
       hasNextPage = page.pageInfo.hasNextPage;
       cursor = page.pageInfo.endCursor;
 
+      console.log(`Page fetched: ${page.nodes.length} invoices, hasNextPage: ${hasNextPage}, total so far: ${allInvoices.length}`);
+
       if (allInvoices.length >= 500) break;
     }
 
