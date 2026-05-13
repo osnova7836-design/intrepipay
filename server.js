@@ -174,7 +174,7 @@ app.get('/api/invoices', async (req, res) => {
       if (lastInv && parseInt(lastInv.invoiceNumber) < 12000) stopFetching = true;
 
       // Avoid Jobber rate limiting
-      await new Promise(r => setTimeout(r, 500));
+      await new Promise(r => setTimeout(r, 1000));
 
       console.log(`Page ${pageCount}: ${page.nodes.length} invoices, hasNextPage: ${hasNextPage}, total: ${allInvoices.length}`);
     }
