@@ -359,10 +359,17 @@ async function fetchJobberInvoices() {
     }
 
     // Build jobberRows and jobberMap from API response
+   const statusMap = {
+      'draft': 'Draft',
+      'awaiting_payment': 'Awaiting Payment',
+      'past_due': 'Past Due',
+      'paid': 'Paid'
+    };
+
     jobberRows = invoices.map(inv => ({
       'Invoice #': inv.invoiceNumber,
       'Subject': (inv.subject||'').trim(),
-      'Status': inv.invoiceStatus,
+      'Status': statusMap[inv.invoiceStatus] || inv.invoiceStatus,
       'Total ($)': inv.total,
       'Client name': inv.client?.name || '',
       'jobberWebUri': inv.jobberWebUri
