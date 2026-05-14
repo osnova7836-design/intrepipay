@@ -2,6 +2,9 @@ const express = require('express');
 const fetch = require('node-fetch');
 const path = require('path');
 const fs = require('fs');
+const { applyJobberPayment } = require('./scripts/jobber-payment');
+
+let playwrightRunning = false;
 
 const app = express();
 app.use(express.json());
@@ -136,6 +139,7 @@ app.get('/api/invoices', async (req, res) => {
             total
             invoiceStatus
             client {
+              id
               name
             }
             jobberWebUri
@@ -318,6 +322,58 @@ app.post('/api/apply-all-payments', async (req, res) => {
   } catch (err) {
     console.error('Apply all error:', err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Playwright payment automation (SSE) ──────────────────────────────────────
+app.get('/api/playwright-payment', async (req, res) => {
+  if (playwrightRunning) {
+    res.status(409).json({ error: 'A payment is already in progress. Wait for it to finish.' });
+    return;
+  }
+  const { clientId, invoiceIds, type, ref, date } = req.query;
+  if (!clientId || !invoiceIds || !type || !ref || !date) {
+    res.status(400).json({ error: 'Missing required parameters: clientId, invoiceIds, type, ref, date' });
+    return;
+  }
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  const send = obj => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+  playwrightRunning = true;
+
+  // Patch console so Playwright's log lines stream to the browser in real time.
+  const origLog = console.log;
+  const origError = console.error;
+  console.log = (...args) => {
+    origLog.apply(console, args);
+    send({ type: 'log', text: args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ') });
+  };
+  console.error = (...args) => {
+    origError.apply(console, args);
+    send({ type: 'log', text: '⚠ ' + args.map(String).join(' ') });
+  };
+
+  try {
+    await applyJobberPayment({
+      clientId,
+      invoiceIds: invoiceIds.split(','),
+      type,
+      ref,
+      date,
+      submit: true,
+    });
+    send({ type: 'done', success: true });
+  } catch (err) {
+    send({ type: 'done', success: false, error: err.message });
+  } finally {
+    playwrightRunning = false;
+    console.log = origLog;
+    console.error = origError;
+    res.end();
   }
 });
 

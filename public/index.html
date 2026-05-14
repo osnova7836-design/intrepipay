@@ -372,7 +372,12 @@ async function fetchJobberInvoices() {
       'Status': statusMap[inv.invoiceStatus] || inv.invoiceStatus,
       'Total ($)': inv.total,
       'Client name': inv.client?.name || '',
-      'jobberWebUri': inv.jobberWebUri
+      'jobberWebUri': inv.jobberWebUri,
+      // Numeric DB IDs needed by the Playwright script.
+      // jobberWebUri ends with the invoice DB ID: ".../invoices/146388256"
+      // client.id is a GID: "gid://Jobber/Client/108338080" — take last segment.
+      'jobberDbId': inv.jobberWebUri ? inv.jobberWebUri.split('/').pop() : '',
+      'clientDbId': inv.client?.id ? inv.client.id.split('/').pop() : '',
     }));
 
     jobberMap = {};
@@ -1013,7 +1018,7 @@ function renderReport(results) {
                 <td class="amt" style="text-align:right">${fmt(i.remittance_amount)}</td>
                 <td class="amt" style="text-align:right">${i.jobber_amount?fmt(i.jobber_amount):'—'}</td>
                 <td class="amt" style="text-align:right;color:${Math.abs(diff)>0.01?'var(--amber)':'var(--text-muted)'}">${Math.abs(diff)>0.01?fmt(Math.abs(diff)):'—'}</td>
-                <td style="display:flex;align-items:center;gap:6px">${matchBadge}${i.jobber_invoice&&i.status==='match'?`<button class="btn-apply btn-apply-one" onclick="applyOne('${i.jobber_invoice}','${i.remittance_amount}',this)" ${isBlocked(r)?'disabled':''}>Apply</button>`:''}</td>
+                <td style="display:flex;align-items:center;gap:6px">${matchBadge}${i.jobber_invoice&&i.status==='match'?`<button class="btn-apply btn-apply-one" onclick="applyOne('${i.jobber_invoice}','${i.remittance_amount}','${(r.ref||'').replace(/'/g,'')}',this)" ${isBlocked(r)?'disabled':''}>Apply</button>`:''}</td>
               </tr>`;
             }).join('')}
             <tr class="tr-total">
@@ -1245,8 +1250,15 @@ function renderApplyBar(r) {
 
   return `<div class="apply-bar">
     <div class="apply-date">
-      <span>Payment date</span>
+      <span>Date</span>
       <input type="date" id="date-${r.ref||r.co.replace(/\s/g,'')}" value="${todayISO()}">
+    </div>
+    <div class="apply-date">
+      <span>Type</span>
+      <select class="apply-type" style="padding:5px 8px;font-size:11px;width:82px;font-family:'IBM Plex Mono',monospace;background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text)">
+        <option value="Check">Check</option>
+        <option value="ACH">ACH</option>
+      </select>
     </div>
     ${blocked
       ? `<span class="apply-blocked">⛔ Blocked — resolve ${blockReason} before applying</span>`
@@ -1263,36 +1275,98 @@ function todayISO() {
   return new Date().toISOString().split('T')[0];
 }
 
-async function applyOne(invoiceNumber, amount, btn) {
+function streamPayment(params, triggerBtn) {
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:200;display:flex;align-items:center;justify-content:center;padding:1rem';
+  overlay.innerHTML = `
+    <div style="background:#1c1917;border-radius:12px;padding:1.5rem;width:100%;max-width:560px;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,0.4)">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
+        <div style="font-family:'Playfair Display',serif;font-size:18px;color:#fff">Applying payment…</div>
+        <div id="sse-spinner" style="width:18px;height:18px;border:2px solid rgba(255,255,255,0.15);border-top-color:#00c9a7;border-radius:50%;animation:spin 0.8s linear infinite;flex-shrink:0"></div>
+      </div>
+      <div id="sse-log" style="flex:1;overflow-y:auto;font-family:'IBM Plex Mono',monospace;font-size:11px;color:rgba(255,255,255,0.55);line-height:1.8;max-height:320px;min-height:80px"></div>
+      <div id="sse-result" style="margin-top:.875rem;display:none"></div>
+      <div style="margin-top:1rem;display:flex;justify-content:flex-end">
+        <button id="sse-close" disabled
+          style="padding:8px 18px;border-radius:6px;font-family:'IBM Plex Mono',monospace;font-size:11px;cursor:not-allowed;border:1px solid rgba(255,255,255,0.15);background:none;color:rgba(255,255,255,0.3);transition:all 0.15s">
+          Close
+        </button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  const logEl    = overlay.querySelector('#sse-log');
+  const resultEl = overlay.querySelector('#sse-result');
+  const closeBtn = overlay.querySelector('#sse-close');
+  const spinner  = overlay.querySelector('#sse-spinner');
+
+  const appendLog = text => {
+    const d = document.createElement('div');
+    d.textContent = text;
+    if (/^⚠|FAILED/.test(text))                          d.style.color = '#fca5a5';
+    else if (/submitted|✓|checked|found in DOM/.test(text)) d.style.color = '#86efac';
+    logEl.appendChild(d);
+    logEl.scrollTop = logEl.scrollHeight;
+  };
+
+  const finish = () => {
+    spinner.style.display = 'none';
+    closeBtn.disabled = false;
+    closeBtn.style.cursor = 'pointer';
+    closeBtn.style.color = 'rgba(255,255,255,0.75)';
+    closeBtn.style.borderColor = 'rgba(255,255,255,0.3)';
+    closeBtn.onclick = () => overlay.remove();
+  };
+
+  const es = new EventSource(`/api/playwright-payment?${params}`);
+
+  es.onmessage = e => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'log') {
+      appendLog(msg.text);
+    } else if (msg.type === 'done') {
+      es.close();
+      finish();
+      resultEl.style.display = '';
+      if (msg.success) {
+        resultEl.innerHTML = `<div style="background:#15803d;border-radius:6px;padding:.75rem 1rem;font-family:'IBM Plex Mono',monospace;font-size:12px;color:#fff;letter-spacing:0.04em">✓ Payment submitted successfully</div>`;
+        if (triggerBtn) { triggerBtn.textContent = '✓ Applied'; triggerBtn.disabled = true; }
+      } else {
+        resultEl.innerHTML = `<div style="background:#b91c1c;border-radius:6px;padding:.75rem 1rem;font-family:'IBM Plex Mono',monospace;font-size:12px;color:#fff">✗ ${msg.error || 'Unknown error'}</div>`;
+      }
+    }
+  };
+
+  es.onerror = () => {
+    es.close();
+    appendLog('⚠ Connection lost — check server logs');
+    finish();
+  };
+}
+
+async function applyOne(invoiceNumber, amount, ref, btn) {
   const block = btn.closest('.pblock');
   const dateInput = block.querySelector('input[type=date]');
   const paymentDate = dateInput ? dateInput.value : todayISO();
-  const ref = block.querySelector('.pblock-meta-item b')?.textContent || '';
+  const typeSelect = block.querySelector('select.apply-type');
+  const payType = typeSelect ? typeSelect.value : 'Check';
 
-  // Copy payment details to clipboard
-  const clipText = `Payment Ref: ${ref}\nDate: ${paymentDate}\nAmount: ${fmt(parseFloat(amount))}\nInvoice: #${invoiceNumber}`;
-  try {
-    await navigator.clipboard.writeText(clipText);
-  } catch(e) {
-    console.warn('Clipboard copy failed:', e);
-  }
-
-  // Open invoice in Jobber
   const row = jobberRows.find(r => String(r['Invoice #']).trim() === String(invoiceNumber).trim());
-  if (row?.jobberWebUri) {
-    window.open(row.jobberWebUri, '_blank');
-    btn.textContent = '✓ Opened';
-    btn.style.color = 'var(--green)';
-    btn.style.borderColor = 'var(--green)';
-  } else {
-    alert('Could not find Jobber URL for invoice #' + invoiceNumber);
+  if (!row?.jobberDbId || !row?.clientDbId) {
+    alert('Could not find Jobber database IDs for invoice #' + invoiceNumber + '.\nMake sure Jobber is connected.');
+    return;
   }
+
+  const params = new URLSearchParams({ clientId: row.clientDbId, invoiceIds: row.jobberDbId, type: payType, ref: ref || '', date: paymentDate });
+  streamPayment(params, btn);
 }
 
 async function applyAll(ref, co, btn) {
   const block = btn.closest('.pblock');
   const dateInput = block.querySelector('input[type=date]');
   const paymentDate = dateInput ? dateInput.value : todayISO();
+  const typeSelect = block.querySelector('select.apply-type');
+  const payType = typeSelect ? typeSelect.value : 'Check';
 
   const result = window._lastResults?.find(r => r.ref === ref && r.co === co);
   if (!result) return;
@@ -1300,64 +1374,23 @@ async function applyAll(ref, co, btn) {
   const matchedItems = result.line_items.filter(i =>
     i.status === 'match' || i.status === 'shortpay' || i.status === 'overpay'
   );
-
   if (matchedItems.length === 0) return;
 
-  // Format for Jobber Details box
-  const invoiceNums = matchedItems.map(i => '#' + i.jobber_invoice).join(', ');
-  const clipText = `Ref: ${ref} | Date: ${paymentDate}\nInvoices: ${invoiceNums}`;
-
-  // Copy to clipboard
-  try {
-    await navigator.clipboard.writeText(clipText);
-  } catch(e) {
-    console.warn('Clipboard copy failed:', e);
+  const invoiceDbIds = [];
+  let clientDbId = null;
+  for (const item of matchedItems) {
+    const row = jobberRows.find(r => String(r['Invoice #']).trim() === String(item.jobber_invoice).trim());
+    if (!row?.jobberDbId) {
+      alert(`Could not find Jobber database ID for invoice #${item.jobber_invoice}.\nMake sure Jobber is connected.`);
+      return;
+    }
+    invoiceDbIds.push(row.jobberDbId);
+    if (!clientDbId) clientDbId = row.clientDbId;
   }
+  if (!clientDbId) { alert('Could not determine client ID.'); return; }
 
-  // Open first invoice in Jobber in new tab
-  const firstItem = matchedItems[0];
-  const firstRow = jobberRows.find(r => String(r['Invoice #']).trim() === String(firstItem.jobber_invoice).trim());
-  setTimeout(() => {
-    if (firstRow?.jobberWebUri) window.open(firstRow.jobberWebUri, '_blank');
-  }, 100);
-
-  // Show checklist popup
-  const invoiceList = matchedItems.map(i =>
-    `<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);font-family:'IBM Plex Mono',monospace;font-size:11px">
-      <span style="color:var(--text-dim);font-weight:600">#${i.jobber_invoice}</span>
-      <span style="color:var(--text-muted);font-size:10px">${i.jobber_subject||''}</span>
-      <span style="color:var(--teal);font-weight:600">${fmt(i.remittance_amount)}</span>
-    </div>`
-  ).join('');
-
-  const overlay = document.createElement('div');
-  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:200;display:flex;align-items:center;justify-content:center;padding:1rem';
-  overlay.classList.add('apply-overlay');
-  overlay.innerHTML = `
-    <div style="background:var(--surface);border-radius:12px;padding:1.5rem;width:100%;max-width:480px;max-height:80vh;overflow-y:auto;box-shadow:0 8px 24px rgba(0,0,0,0.15)">
-      <div style="font-family:'Playfair Display',serif;font-size:20px;margin-bottom:.25rem">Apply Payment</div>
-      <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--text-muted);margin-bottom:1rem">
-        Ref: <b style="color:var(--text-dim)">${ref}</b> · Date: <b style="color:var(--text-dim)">${paymentDate}</b> · ${fmt(result.total_paid)}
-      </div>
-      <div style="background:var(--teal-bg);border:1px solid var(--teal-border);border-radius:8px;padding:.75rem;margin-bottom:.75rem;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--teal)">
-        ✓ Copied to clipboard — paste into Jobber's Details box
-      </div>
-      <div style="background:var(--surface2);border-radius:6px;padding:.75rem;margin-bottom:1rem;font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--text-dim);word-break:break-all">
-        Ref: ${ref} | Date: ${paymentDate}<br>Invoices: ${invoiceNums}
-      </div>
-      <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:.5rem">
-        Select these ${matchedItems.length} invoices in Jobber:
-      </div>
-      ${invoiceList}
-      <div style="display:flex;gap:8px;margin-top:1rem;justify-content:flex-end">
-        <button onclick="this.closest('.apply-overlay').remove()"
-          style="padding:8px 16px;border-radius:6px;font-family:'IBM Plex Mono',monospace;font-size:11px;cursor:pointer;border:1px solid var(--border-strong);background:none;color:var(--text-dim)">
-          Done
-        </button>
-      </div>
-    </div>`;
-  overlay.addEventListener('click', e => { if(e.target === overlay) overlay.remove(); });
-  document.body.appendChild(overlay);
+  const params = new URLSearchParams({ clientId: clientDbId, invoiceIds: invoiceDbIds.join(','), type: payType, ref: ref || '', date: paymentDate });
+  streamPayment(params, btn);
 }
 </script>
 </body>
