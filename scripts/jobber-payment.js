@@ -5,6 +5,7 @@ const readline = require('readline');
 const JOBBER_ORIGIN = 'https://secure.getjobber.com';
 const CHROME_PATH = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
 const PROFILE_DIR = 'D:\\chrome-debug-profile';
+const BATCH_SIZE = 50; // Jobber rejects payment applications with more than 50 invoices
 
 function buildPaymentUrl({ clientId, invoiceIds }) {
   const u = new URL('/payments/new', JOBBER_ORIGIN);
@@ -255,6 +256,56 @@ async function clickSubmit(page) {
   await page.waitForLoadState('load');
 }
 
+// Fills and optionally submits one Jobber payment form for a single batch of invoices.
+// The caller is responsible for opening and closing the page.
+async function applyJobberPaymentBatch(page, { clientId, invoiceIds, type, ref, date, submit, navigateOnly }) {
+  const url = buildPaymentUrl({ clientId, invoiceIds });
+  console.log(`Navigating to ${url}`);
+  await page.goto(url, { waitUntil: 'load' });
+  // SPA may continue rendering after load — wait for the form's first interactive element.
+  await page.waitForSelector('select, input[type="text"], input[type="date"]', { timeout: 30000 });
+  // Wait for the sticky list header so checkbox indices are stable before we count them.
+  await page.waitForSelector('[data-testid="ATL-DataList-stickyHeader"]', { timeout: 15000 })
+    .catch(() => {});
+
+  if (/\/login|\/sign_in|\/users\/sign_in/.test(page.url())) {
+    throw new Error(`Redirected to login (${page.url()}) — session was not persisted.`);
+  }
+
+  if (navigateOnly) {
+    console.log('\n--- NAVIGATE-ONLY ---');
+    console.log('Page loaded. Inspect freely; no fields will be filled and nothing will be submitted.');
+    await waitForEnter('Press Enter to close the browser... ');
+    return;
+  }
+
+  console.log(`Setting payment method to "${type}"`);
+  await selectPaymentMethod(page, type);
+
+  console.log(`Filling reference number "${ref}"`);
+  await fillReference(page, type, ref);
+
+  // Check invoices first — scrolling 200+ rows triggers React re-renders that
+  // reset the date field if it was filled earlier.
+  console.log(`Ensuring invoices checked: ${invoiceIds.join(', ')}`);
+  await ensureInvoicesChecked(page, invoiceIds);
+
+  // Fill date last so React can't overwrite it.
+  console.log(`Filling transaction date "${date}"`);
+  await fillTransactionDate(page, date);
+
+  if (submit) {
+    console.log('Submitting payment...');
+    await clickSubmit(page);
+    console.log('Payment submitted.');
+  } else {
+    console.log('\n--- DRY RUN ---');
+    console.log('Form is filled. The browser is left open for review.');
+    console.log('Re-run with --submit to actually click submit.');
+    await waitForEnter('Press Enter to close the browser... ');
+  }
+}
+
 async function applyJobberPayment({
   clientId,
   invoiceIds,  // array of one or more invoice IDs
@@ -272,55 +323,30 @@ async function applyJobberPayment({
     if (!date) throw new Error('date is required (e.g. "2026-05-13" or "05/13/2026")');
   }
 
+  // Split into batches of BATCH_SIZE — Jobber rejects payment applications with more than 50 invoices.
+  const batches = [];
+  for (let i = 0; i < invoiceIds.length; i += BATCH_SIZE) {
+    batches.push(invoiceIds.slice(i, i + BATCH_SIZE));
+  }
+  if (batches.length > 1) {
+    console.log(`${invoiceIds.length} invoices → ${batches.length} batches of up to ${BATCH_SIZE}`);
+  }
+
   const ctx = await launchStealthContext(headless);
   try {
     await ensureLoggedIn(ctx);
 
-    const page = await ctx.newPage();
-    const url = buildPaymentUrl({ clientId, invoiceIds });
-    console.log(`Navigating to ${url}`);
-    await page.goto(url, { waitUntil: 'load' });
-    // SPA may continue rendering after load — wait for the form's first interactive element.
-    await page.waitForSelector('select, input[type="text"], input[type="date"]', { timeout: 30000 });
-    // Wait for the sticky list header so checkbox indices are stable before we count them.
-    await page.waitForSelector('[data-testid="ATL-DataList-stickyHeader"]', { timeout: 15000 })
-      .catch(() => {});
-
-    if (/\/login|\/sign_in|\/users\/sign_in/.test(page.url())) {
-      throw new Error(`Redirected to login (${page.url()}) — ensureLoggedIn passed but session wasn't persisted.`);
-    }
-
-    if (navigateOnly) {
-      console.log('\n--- NAVIGATE-ONLY ---');
-      console.log('Page loaded. Inspect freely; no fields will be filled and nothing will be submitted.');
-      await waitForEnter('Press Enter to close the browser... ');
-      return;
-    }
-
-    console.log(`Setting payment method to "${type}"`);
-    await selectPaymentMethod(page, type);
-
-    console.log(`Filling reference number "${ref}"`);
-    await fillReference(page, type, ref);
-
-    // Check invoices first — scrolling 200+ rows triggers React re-renders that
-    // reset the date field if it was filled earlier.
-    console.log(`Ensuring invoices checked: ${invoiceIds.join(', ')}`);
-    await ensureInvoicesChecked(page, invoiceIds);
-
-    // Fill date last so React can't overwrite it.
-    console.log(`Filling transaction date "${date}"`);
-    await fillTransactionDate(page, date);
-
-    if (submit) {
-      console.log('Submitting payment...');
-      await clickSubmit(page);
-      console.log('Payment submitted.');
-    } else {
-      console.log('\n--- DRY RUN ---');
-      console.log('Form is filled. The browser is left open for review.');
-      console.log('Re-run with --submit to actually click submit.');
-      await waitForEnter('Press Enter to close the browser... ');
+    for (let i = 0; i < batches.length; i++) {
+      const batch = batches[i];
+      if (batches.length > 1) {
+        console.log(`\n=== Batch ${i + 1} of ${batches.length} (${batch.length} invoices) ===`);
+      }
+      const page = await ctx.newPage();
+      try {
+        await applyJobberPaymentBatch(page, { clientId, invoiceIds: batch, type, ref, date, submit, navigateOnly });
+      } finally {
+        await page.close();
+      }
     }
   } finally {
     await ctx.close();

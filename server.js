@@ -358,9 +358,14 @@ app.get('/api/playwright-payment', async (req, res) => {
   };
 
   try {
+    const ids = invoiceIds.split(',').map(s => s.trim()).filter(Boolean);
+    const batchCount = Math.ceil(ids.length / 50);
+    if (batchCount > 1) {
+      send({ type: 'log', text: `${ids.length} invoices → ${batchCount} batches of up to 50 (Jobber limit).` });
+    }
     await applyJobberPayment({
       clientId,
-      invoiceIds: invoiceIds.split(','),
+      invoiceIds: ids,
       type,
       ref,
       date,
