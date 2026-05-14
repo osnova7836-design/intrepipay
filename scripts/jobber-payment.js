@@ -4,7 +4,7 @@ const readline = require('readline');
 
 const JOBBER_ORIGIN = 'https://secure.getjobber.com';
 const CHROME_PATH = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
-const PROFILE_DIR = 'D:\\chrome-debug-profile';
+const PROFILE_DIR = process.env.RENDER ? '/tmp/chrome-profile' : 'D:\\chrome-debug-profile';
 const BATCH_SIZE = 50; // Jobber rejects payment applications with more than 50 invoices
 
 function buildPaymentUrl({ clientId, invoiceIds }) {
@@ -23,16 +23,23 @@ function waitForEnter(prompt = 'Press Enter to continue...') {
   });
 }
 
-// Launches real Chrome with the persistent profile and no CDP debug port.
+// Launches real Chrome (local) or Playwright's bundled Chromium (Render/Linux).
 // Cloudflare sees a normal Chrome process — no --remote-debugging-port, no
 // --enable-automation, and navigator.webdriver is patched out via init script.
 async function launchStealthContext(headless = false) {
-  const ctx = await chromium.launchPersistentContext(PROFILE_DIR, {
-    executablePath: CHROME_PATH,
-    headless,
-    args: ['--disable-blink-features=AutomationControlled', '--disable-gpu'],
+  const onRender = !!process.env.RENDER;
+  const opts = {
+    headless: onRender ? true : headless,
+    args: [
+      '--disable-blink-features=AutomationControlled',
+      '--disable-gpu',
+      ...(onRender ? ['--no-sandbox', '--disable-setuid-sandbox'] : []),
+    ],
     ignoreDefaultArgs: ['--enable-automation'],
-  });
+  };
+  if (!onRender) opts.executablePath = CHROME_PATH;
+
+  const ctx = await chromium.launchPersistentContext(PROFILE_DIR, opts);
   // Runs before any page script so webdriver is never observable.
   await ctx.addInitScript(() => {
     Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
@@ -40,9 +47,22 @@ async function launchStealthContext(headless = false) {
   return ctx;
 }
 
-// Checks whether the profile's cookies are still valid. If not, prompts the
-// user to log in manually in the open browser window.
+// On Render: injects Jobber cookies from the JOBBER_COOKIES env var (no display available).
+// Locally: uses the persistent Chrome profile; prompts for interactive login if expired.
 async function ensureLoggedIn(ctx) {
+  if (process.env.RENDER) {
+    if (!process.env.JOBBER_COOKIES) {
+      throw new Error(
+        'JOBBER_COOKIES env var is not set. ' +
+        'Run "node scripts/export-jobber-cookies.js" locally and paste the output into Render.'
+      );
+    }
+    const cookies = JSON.parse(process.env.JOBBER_COOKIES);
+    await ctx.addCookies(cookies);
+    console.log(`Injected ${cookies.length} Jobber cookies from JOBBER_COOKIES env var.`);
+    return;
+  }
+
   const page = await ctx.newPage();
   await page.goto(JOBBER_ORIGIN + '/', { waitUntil: 'load' });
 
