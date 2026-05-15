@@ -8,6 +8,7 @@
     "install-browsers": "playwright install chromium"
   },
   "dependencies": {
+    "dotenv": "^17.4.2",
     "express": "^4.18.2",
     "node-fetch": "^2.7.0",
     "playwright": "^1.60.0"
