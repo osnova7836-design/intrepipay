@@ -5,3 +5,6 @@ services:
     buildCommand: npm install
     startCommand: node server.js
     plan: free
+    envVars:
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: "0"
