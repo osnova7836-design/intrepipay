@@ -352,12 +352,21 @@ app.post('/api/apply-all-payments', async (req, res) => {
 // ── Playwright payment automation (SSE) ──────────────────────────────────────
 app.get('/api/playwright-payment', async (req, res) => {
   if (playwrightRunning) {
-    res.status(409).json({ error: 'A payment is already in progress. Wait for it to finish.' });
+    // Use SSE format so the browser can read the error message instead of just "Connection lost"
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.flushHeaders();
+    res.write(`data: ${JSON.stringify({ type: 'done', success: false, error: 'A payment is already in progress — wait for it to finish, or visit /api/queue-status to check.' })}\n\n`);
+    res.end();
     return;
   }
   const { clientId, invoiceIds, type, ref, date } = req.query;
   if (!clientId || !invoiceIds || !type || !ref || !date) {
-    res.status(400).json({ error: 'Missing required parameters: clientId, invoiceIds, type, ref, date' });
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.flushHeaders();
+    res.write(`data: ${JSON.stringify({ type: 'done', success: false, error: `Missing required parameters. Got: clientId=${clientId} invoiceIds=${invoiceIds} type=${type} ref=${ref} date=${date}` })}\n\n`);
+    res.end();
     return;
   }
 
@@ -367,6 +376,7 @@ app.get('/api/playwright-payment', async (req, res) => {
   res.flushHeaders();
 
   const send = obj => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+  const keepAlive = setInterval(() => res.write(': keep-alive\n\n'), 15000);
   playwrightRunning = true;
 
   // On Render: queue for local worker. Locally: run Playwright directly.
@@ -374,9 +384,11 @@ app.get('/api/playwright-payment', async (req, res) => {
     const ids = invoiceIds.split(',').map(s => s.trim()).filter(Boolean);
     const jobId = createJob({ clientId, invoiceIds: ids, type, ref, date });
     send({ type: 'log', text: `Job ${jobId} queued — waiting for local worker to pick up...` });
+    console.log(`Job ${jobId} queued: clientId=${clientId} invoiceIds=${ids.join(',')} date=${date}`);
 
     const onLog  = text => send({ type: 'log', text });
     const onDone = ({ success, error }) => {
+      clearInterval(keepAlive);
       send({ type: 'done', success, error });
       cleanup();
       playwrightRunning = false;
@@ -392,7 +404,7 @@ app.get('/api/playwright-payment', async (req, res) => {
     };
 
     // If the browser closes the connection before the job finishes, clean up.
-    res.on('close', () => { cleanup(); playwrightRunning = false; });
+    res.on('close', () => { clearInterval(keepAlive); cleanup(); playwrightRunning = false; });
     return;
   }
 
@@ -419,11 +431,27 @@ app.get('/api/playwright-payment', async (req, res) => {
   } catch (err) {
     send({ type: 'done', success: false, error: err.message });
   } finally {
+    clearInterval(keepAlive);
     playwrightRunning = false;
     console.log = origLog;
     console.error = origError;
     res.end();
   }
+});
+
+// ── Queue status / reset ──────────────────────────────────────────────────────
+app.get('/api/queue-status', (req, res) => {
+  res.json({
+    playwrightRunning,
+    jobQueueSize: jobQueue.size,
+    jobs: [...jobQueue.values()].map(j => ({ id: j.id, status: j.status, params: j.params })),
+  });
+});
+
+app.post('/api/queue-reset', (req, res) => {
+  jobQueue.clear();
+  playwrightRunning = false;
+  res.json({ ok: true, message: 'Queue cleared and playwrightRunning reset to false' });
 });
 
 // ── Local worker endpoints ────────────────────────────────────────────────────
