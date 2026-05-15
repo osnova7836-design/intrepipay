@@ -2,7 +2,7 @@ services:
   - type: web
     name: intrepipay
     env: node
-    buildCommand: npm install
+    buildCommand: npm install && PLAYWRIGHT_BROWSERS_PATH=0 npx playwright install chromium
     startCommand: node server.js
     plan: free
     envVars:
