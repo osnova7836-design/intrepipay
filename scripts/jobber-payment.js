@@ -1,5 +1,5 @@
 // Must be set before requiring playwright so the browser path resolves correctly.
-if (process.env.RENDER) process.env.PLAYWRIGHT_BROWSERS_PATH = '0';
+if (process.env.RENDER) process.env.PLAYWRIGHT_BROWSERS_PATH = '/opt/render/project/src/.playwright-browsers';
 
 const { chromium } = require('playwright');
 const path = require('path');
