@@ -122,6 +122,14 @@ textarea::placeholder{color:var(--text-muted)}
 .pblock-amount{font-family:'Playfair Display',serif;font-size:20px;font-weight:700;color:var(--teal)}
 .pblock-status{font-family:'IBM Plex Mono',monospace;font-size:10px;margin-top:2px}
 .pblock-warn{background:var(--amber-bg);border-top:1px solid var(--amber-border);padding:.625rem 1.25rem;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--amber)}
+.deduction-bar{border-top:1px solid #92400e;background:#1c1007;padding:.75rem 1.25rem;display:flex;flex-direction:column;gap:.5rem}
+.deduction-bar-title{font-family:'IBM Plex Mono',monospace;font-size:10px;color:#f59e0b;letter-spacing:0.06em;text-transform:uppercase}
+.deduction-item{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.deduction-item-info{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--text-dim)}
+.deduction-item-inv{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--text-muted)}
+.btn-add-deduction{padding:5px 10px;border-radius:6px;font-family:'IBM Plex Mono',monospace;font-size:10px;cursor:pointer;letter-spacing:0.06em;text-transform:uppercase;border:none;background:#92400e;color:#fef3c7;font-weight:500}
+.btn-add-deduction:hover{background:#b45309}
+.btn-add-deduction:disabled{opacity:0.5;cursor:not-allowed}
 
 /* Table */
 .tbl-wrap{overflow-x:auto}
@@ -853,12 +861,15 @@ function matchPayment(payment) {
       jobber_amount: jobberAmt,
       difference: diff,
       status,
-      note
+      note,
+      isDeduction: item.isDeduction || false
     };
   });
 
-  const totalPaid = lineItems.filter(i=>!i.isDeduction).reduce((s,i)=>s+Math.abs(i.remittance_amount||0),0);
-  const totalInvoiced = lineItems.filter(i=>i.jobber_amount).reduce((s,i)=>s+(i.jobber_amount||0),0);
+  // totalPaid = sum of all remittance amounts with sign; deductions are negative and already
+  // reflected in the check total, so summing with sign gives the actual amount received.
+  const totalPaid = lineItems.reduce((s,i)=>s+(i.remittance_amount||0),0);
+  const totalInvoiced = lineItems.filter(i=>!i.isDeduction&&i.jobber_amount).reduce((s,i)=>s+(i.jobber_amount||0),0);
   const discrepancies = lineItems.filter(i=>i.status==='mismatch'||i.status==='missing').length;
   const unresolved = lineItems.filter(i=>['missing','draft','mismatch'].includes(i.status));
 
@@ -1262,21 +1273,56 @@ function manageKey() {
 window._apiKey = localStorage.getItem('ip_key')||'';
 if (window._apiKey) { setTimeout(()=>{ el('key-btn').textContent='🔑 Key ✓'; el('key-btn').style.color='#00c9a7'; },100); }
 
-  function isBlocked(r) {
+const resolvedDeductions = new Set();
+
+function isBlocked(r) {
   return r.line_items.some(i => i.status === 'missing' || i.status === 'draft');
+}
+
+function deductionKey(blockKey, claimRef) {
+  return `${blockKey}::${claimRef}`;
 }
 
 function renderApplyBar(r) {
   const blocked = isBlocked(r);
   const blockReason = r.line_items.find(i => i.status === 'missing') ? 'missing invoices' : 'draft invoices';
   const matchedItems = r.line_items.filter(i => i.status === 'match' || i.status === 'shortpay' || i.status === 'overpay');
+  const deductions = r.line_items.filter(i => i.status === 'deduction');
+  const blockKey = (r.ref || r.co || '').replace(/[^a-zA-Z0-9]/g, '_');
 
-  if (matchedItems.length === 0) return '';
+  if (matchedItems.length === 0 && deductions.length === 0) return '';
 
-  return `<div class="apply-bar">
+  const deductionSection = deductions.length === 0 ? '' : `
+    <div class="deduction-bar" id="dbar-${blockKey}">
+      <div class="deduction-bar-title">⚠ Add deductions to Jobber before applying</div>
+      ${deductions.map(d => {
+        const dk = deductionKey(blockKey, d.ref);
+        const safeDk = dk.replace(/[^a-zA-Z0-9_]/g, '_');
+        const invNum = d.jobber_invoice || '';
+        return `<div class="deduction-item" id="ditem-${safeDk}">
+          <span class="deduction-item-info">Claim #${d.ref} · ${fmt(d.amount)}</span>
+          ${invNum
+            ? `<span class="deduction-item-inv">→ Invoice #${invNum}</span>`
+            : `<span style="color:var(--amber);font-family:'IBM Plex Mono',monospace;font-size:11px">No invoice matched</span>`}
+          <button class="btn-add-deduction" id="dbtn-${safeDk}"
+            onclick="addDeductionToJobber(this,'${safeDk}','${d.ref}','${invNum}',${d.amount},'${blockKey}')">
+            + Add to Jobber
+          </button>
+          <span id="dok-${safeDk}" style="display:none;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--green)">✓ Added</span>
+        </div>`;
+      }).join('')}
+    </div>`;
+
+  const hasDeductions = deductions.length > 0;
+  const applyDisabled = hasDeductions ? 'disabled style="opacity:0.45;cursor:not-allowed"' : '';
+  const applyLabel = hasDeductions
+    ? `⛔ Add deductions first`
+    : `▶ Apply all ${matchedItems.length} payment${matchedItems.length!==1?'s':''}`;
+
+  return `${deductionSection}<div class="apply-bar">
     <div class="apply-date">
       <span>Date</span>
-      <input type="date" id="date-${r.ref||r.co.replace(/\s/g,'')}" value="${r.date || todayISO()}">
+      <input type="date" id="date-${blockKey}" value="${r.date || todayISO()}">
     </div>
     <div class="apply-date">
       <span>Type</span>
@@ -1287,13 +1333,134 @@ function renderApplyBar(r) {
     </div>
     ${blocked
       ? `<span class="apply-blocked">⛔ Blocked — resolve ${blockReason} before applying</span>`
-      : `<button class="btn-apply btn-apply-all"
+      : matchedItems.length === 0 ? ''
+      : `<button class="btn-apply btn-apply-all" id="apply-btn-${blockKey}" ${applyDisabled}
           onclick="applyAll('${r.ref||''}','${r.co||''}',this)">
-          ▶ Apply all ${matchedItems.length} payment${matchedItems.length!==1?'s':''}
+          ${applyLabel}
         </button>`
     }
-    <span class="apply-status" id="status-${r.ref||r.co.replace(/\s/g,'')}"></span>
+    <span class="apply-status" id="status-${blockKey}"></span>
   </div>`;
+}
+
+function suggestInvoiceForDeduction(co, deductionAmount, excludeRef) {
+  const absAmt = Math.abs(deductionAmount);
+  const threshold = absAmt + 10;
+  const coWords = (co || '').toLowerCase().split(/\s+/).filter(w => w.length > 3);
+  const eligible = jobberRows.filter(row => {
+    if (String(row['Invoice #']) === String(excludeRef)) return false;
+    if (row['Status'] === 'Paid') return false;
+    const clientName = (row['Client'] || '').toLowerCase();
+    if (!coWords.some(w => clientName.includes(w))) return false;
+    const rowAmt = parseFloat(String(row['Amount'] || '0').replace(/[$,]/g, ''));
+    return rowAmt > threshold;
+  });
+  if (eligible.length === 0) return '';
+  eligible.sort((a, b) => parseFloat(a['Amount']) - parseFloat(b['Amount']));
+  return String(eligible[0]['Invoice #']);
+}
+
+function checkDeductionsResolved(blockKey, totalDeductions) {
+  let resolved = 0;
+  for (let i = 0; i < totalDeductions; i++) {
+    // Count by checking DOM — each resolved deduction has its ok span visible
+  }
+  // Check all dok- spans in this block
+  const bar = document.getElementById(`dbar-${blockKey}`);
+  if (!bar) return;
+  const allOk = [...bar.querySelectorAll('[id^="dok-"]')].every(el => el.style.display !== 'none');
+  if (allOk) {
+    bar.style.display = 'none';
+    const applyBtn = document.getElementById(`apply-btn-${blockKey}`);
+    if (applyBtn) {
+      applyBtn.disabled = false;
+      applyBtn.removeAttribute('style');
+      applyBtn.textContent = applyBtn.textContent.replace(/⛔.*/, '▶ Apply all payments');
+    }
+  }
+}
+
+function addDeductionToJobber(btn, safeDk, claimRef, matchedInvoice, amount, blockKey) {
+  const absAmt = Math.abs(amount);
+  // Find the payment result for this block to get co for suggestion
+  const result = window._lastResults?.find(r => {
+    const bk = (r.ref || r.co || '').replace(/[^a-zA-Z0-9]/g, '_');
+    return bk === blockKey;
+  });
+  const co = result?.co || '';
+  const suggested = suggestInvoiceForDeduction(co, amount, matchedInvoice) || matchedInvoice || '';
+
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.72);z-index:300;display:flex;align-items:center;justify-content:center;padding:1rem';
+  overlay.innerHTML = `
+    <div style="background:#1c1917;border-radius:12px;padding:1.5rem;width:100%;max-width:400px;box-shadow:0 8px 32px rgba(0,0,0,0.5)">
+      <div style="font-family:'Playfair Display',serif;font-size:17px;font-weight:700;margin-bottom:.25rem">Add recall deduction</div>
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--text-muted);margin-bottom:1.25rem">
+        WO #${claimRef} · <span style="color:#f87171">−${fmt(absAmt)}</span>
+      </div>
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--text-muted);margin-bottom:.4rem;text-transform:uppercase;letter-spacing:.06em">
+        Add "Recouped Payment" line item to invoice #
+      </div>
+      <input id="deduct-inv-input" type="text" value="${suggested}" placeholder="Invoice number"
+        style="background:var(--surface);border:1px solid var(--teal);border-radius:6px;color:var(--text);font-family:'IBM Plex Mono',monospace;font-size:14px;padding:8px 10px;width:100%;margin-bottom:.5rem">
+      ${suggested ? `<div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--text-muted);margin-bottom:1rem">
+        Suggested: open invoice with balance &gt; ${fmt(absAmt + 10)}
+      </div>` : `<div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--amber);margin-bottom:1rem">
+        No eligible invoice found — enter invoice # manually
+      </div>`}
+      <div id="deduct-err" style="display:none;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#f87171;margin-bottom:.75rem"></div>
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button onclick="this.closest('[style*=fixed]').remove()"
+          style="padding:7px 14px;border-radius:6px;font-family:'IBM Plex Mono',monospace;font-size:10px;cursor:pointer;letter-spacing:.06em;text-transform:uppercase;border:1px solid rgba(255,255,255,0.2);background:transparent;color:var(--text)">Cancel</button>
+        <button id="deduct-confirm-btn"
+          style="padding:7px 14px;border-radius:6px;font-family:'IBM Plex Mono',monospace;font-size:10px;cursor:pointer;letter-spacing:.06em;text-transform:uppercase;border:none;background:#92400e;color:#fef3c7;font-weight:500">Add to Jobber</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  overlay.querySelector('#deduct-confirm-btn').onclick = async () => {
+    const invoiceNumber = overlay.querySelector('#deduct-inv-input').value.trim();
+    const errEl = overlay.querySelector('#deduct-err');
+    const confirmBtn = overlay.querySelector('#deduct-confirm-btn');
+    if (!invoiceNumber) { errEl.textContent = 'Enter an invoice number.'; errEl.style.display = ''; return; }
+
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = 'Adding…';
+    errEl.style.display = 'none';
+
+    try {
+      const resp = await fetch('/api/add-line-item', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          invoiceNumber,
+          name: `Recouped Payment — WO #${claimRef}`,
+          unitPrice: -absAmt
+        })
+      });
+      const data = await resp.json();
+      if (!resp.ok || data.error) {
+        errEl.textContent = data.error || 'Failed to add line item';
+        errEl.style.display = '';
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = 'Add to Jobber';
+        return;
+      }
+      // Success
+      overlay.remove();
+      resolvedDeductions.add(safeDk);
+      document.getElementById(`dbtn-${safeDk}`)?.remove();
+      const okEl = document.getElementById(`dok-${safeDk}`);
+      if (okEl) { okEl.style.display = ''; okEl.textContent = `✓ Added to Invoice #${invoiceNumber}`; }
+      // Check if all deductions in this block are now resolved
+      checkDeductionsResolved(blockKey);
+    } catch (err) {
+      errEl.textContent = err.message;
+      errEl.style.display = '';
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = 'Add to Jobber';
+    }
+  };
 }
 
 function todayISO() {
