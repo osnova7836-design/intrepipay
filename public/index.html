@@ -1358,20 +1358,20 @@ function renderApplyBar(r) {
   </div>`;
 }
 
-function suggestInvoiceForDeduction(co, deductionAmount, excludeRef) {
+function suggestInvoiceForDeduction(clientDbId, deductionAmount, excludeRef) {
   const absAmt = Math.abs(deductionAmount);
   const threshold = absAmt + 10;
-  const coWords = (co || '').toLowerCase().split(/\s+/).filter(w => w.length > 3);
   const eligible = jobberRows.filter(row => {
     if (String(row['Invoice #']) === String(excludeRef)) return false;
     if (row['Status'] === 'Paid') return false;
-    const clientName = (row['Client name'] || '').toLowerCase();
-    if (!coWords.some(w => clientName.includes(w))) return false;
+    if (clientDbId && row['clientDbId'] !== clientDbId) return false;
     const rowAmt = parseFloat(String(row['Total ($)'] || '0').replace(/[$,]/g, ''));
     return rowAmt > threshold;
   });
   if (eligible.length === 0) return '';
-  eligible.sort((a, b) => parseFloat(a['Amount']) - parseFloat(b['Amount']));
+  eligible.sort((a, b) =>
+    parseFloat(String(a['Total ($)']).replace(/[$,]/g,'')) - parseFloat(String(b['Total ($)']).replace(/[$,]/g,''))
+  );
   return String(eligible[0]['Invoice #']);
 }
 
@@ -1402,8 +1402,14 @@ function addDeductionToJobber(btn, safeDk, claimRef, matchedInvoice, amount, blo
     const bk = (r.ref || r.co || '').replace(/[^a-zA-Z0-9]/g, '_');
     return bk === blockKey;
   });
-  const co = result?.co || '';
-  const suggested = suggestInvoiceForDeduction(co, amount, matchedInvoice) || '';
+  // Resolve clientDbId from any already-matched invoice in this block
+  let clientDbId = null;
+  const matchedInBlock = result?.line_items?.filter(i => i.status === 'match' || i.status === 'shortpay' || i.status === 'overpay') || [];
+  for (const item of matchedInBlock) {
+    const r = jobberRows.find(r => String(r['Invoice #']).trim() === String(item.jobber_invoice).trim());
+    if (r?.clientDbId) { clientDbId = r.clientDbId; break; }
+  }
+  const suggested = suggestInvoiceForDeduction(clientDbId, amount, matchedInvoice) || '';
 
   const overlay = document.createElement('div');
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.72);z-index:300;display:flex;align-items:center;justify-content:center;padding:1rem';
@@ -1440,8 +1446,13 @@ function addDeductionToJobber(btn, safeDk, claimRef, matchedInvoice, amount, blo
     if (!invoiceNumber) { errEl.textContent = 'Enter an invoice number.'; errEl.style.display = ''; return; }
 
     const invRow = jobberRows.find(r => String(r['Invoice #']).trim() === invoiceNumber);
-    if (!invRow?.jobberGqlId) {
-      errEl.textContent = `Invoice #${invoiceNumber} not found in Jobber — make sure Jobber is connected and reload.`;
+    if (!invRow) {
+      errEl.textContent = `Invoice #${invoiceNumber} not found in the ${jobberRows.length} loaded invoices — check the number and try again.`;
+      errEl.style.display = '';
+      return;
+    }
+    if (!invRow.jobberGqlId) {
+      errEl.textContent = `Invoice #${invoiceNumber} found but missing its Jobber ID — please disconnect and reconnect Jobber, then try again.`;
       errEl.style.display = '';
       return;
     }
