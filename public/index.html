@@ -373,6 +373,19 @@ async function fetchJobberInvoices() {
       'paid': 'Paid'
     };
 
+    // Jobber's API returns client.id as a base64-encoded GID (newer format)
+    // or a path-style GID ("gid://Jobber/Client/108338080"). Either way we
+    // need just the trailing numeric database ID.
+    function extractNumericId(gid) {
+      if (!gid) return '';
+      try {
+        const decoded = atob(gid);           // e.g. "Client-108338080"
+        const m = decoded.match(/(\d+)$/);
+        if (m) return m[1];
+      } catch (e) {}
+      return gid.split('/').pop();           // gid://Jobber/Client/108338080
+    }
+
     jobberRows = invoices.map(inv => ({
       'Invoice #': inv.invoiceNumber,
       'Subject': (inv.subject||'').trim(),
@@ -380,11 +393,8 @@ async function fetchJobberInvoices() {
       'Total ($)': inv.total,
       'Client name': inv.client?.name || '',
       'jobberWebUri': inv.jobberWebUri,
-      // Numeric DB IDs needed by the Playwright script.
-      // jobberWebUri ends with the invoice DB ID: ".../invoices/146388256"
-      // client.id is a GID: "gid://Jobber/Client/108338080" — take last segment.
       'jobberDbId': inv.jobberWebUri ? inv.jobberWebUri.split('/').pop() : '',
-      'clientDbId': inv.client?.id ? inv.client.id.split('/').pop() : '',
+      'clientDbId': extractNumericId(inv.client?.id),
     }));
 
     jobberMap = {};
