@@ -220,7 +220,7 @@ app.get('/api/invoices', async (req, res) => {
 app.post('/api/add-line-item', async (req, res) => {
   try {
     const token = await getValidToken();
-    const { invoiceNumber, name, unitPrice } = req.body;
+    const { invoiceNumber, name, unitPrice, description } = req.body;
 
     if (!invoiceNumber || unitPrice === undefined) {
       return res.status(400).json({ error: 'invoiceNumber and unitPrice required' });
@@ -243,16 +243,18 @@ app.post('/api/add-line-item', async (req, res) => {
     });
 
     const lookupData = await lookupResp.json();
-    if (lookupData.errors) return res.status(400).json({ error: lookupData.errors });
+    if (lookupData.errors) return res.status(400).json({ error: lookupData.errors.map(e => e.message).join(', ') });
 
     const invoice = lookupData.data?.invoices?.nodes?.[0];
     if (!invoice) return res.status(404).json({ error: `Invoice #${invoiceNumber} not found` });
 
     const safeName = (name || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    const safeDesc = (description || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
     const mutation = `mutation {
       lineItemCreate(input: {
         linkedToId: "${invoice.id}"
         name: "${safeName}"
+        ${safeDesc ? `description: "${safeDesc}"` : ''}
         quantity: 1
         unitPrice: ${parseFloat(unitPrice)}
       }) {

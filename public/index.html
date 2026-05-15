@@ -1402,7 +1402,7 @@ function addDeductionToJobber(btn, safeDk, claimRef, matchedInvoice, amount, blo
     return bk === blockKey;
   });
   const co = result?.co || '';
-  const suggested = suggestInvoiceForDeduction(co, amount, matchedInvoice) || matchedInvoice || '';
+  const suggested = suggestInvoiceForDeduction(co, amount, matchedInvoice) || '';
 
   const overlay = document.createElement('div');
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.72);z-index:300;display:flex;align-items:center;justify-content:center;padding:1rem';
@@ -1413,7 +1413,7 @@ function addDeductionToJobber(btn, safeDk, claimRef, matchedInvoice, amount, blo
         WO #${claimRef} · <span style="color:#f87171">−${fmt(absAmt)}</span>
       </div>
       <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--text-muted);margin-bottom:.4rem;text-transform:uppercase;letter-spacing:.06em">
-        Add "Recouped Payment" line item to invoice #
+        Add "Recouped Funds" line item to invoice #
       </div>
       <input id="deduct-inv-input" type="text" value="${suggested}" placeholder="Invoice number"
         style="background:var(--surface);border:1px solid var(--teal);border-radius:6px;color:var(--text);font-family:'IBM Plex Mono',monospace;font-size:14px;padding:8px 10px;width:100%;margin-bottom:.5rem">
@@ -1448,7 +1448,8 @@ function addDeductionToJobber(btn, safeDk, claimRef, matchedInvoice, amount, blo
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           invoiceNumber,
-          name: `Recouped Payment — WO #${claimRef}`,
+          name: 'Recouped Funds',
+          description: `WO #${claimRef}`,
           unitPrice: -absAmt
         })
       });
