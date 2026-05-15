@@ -2,7 +2,7 @@ services:
   - type: web
     name: intrepipay
     env: node
-    buildCommand: npm install && PLAYWRIGHT_BROWSERS_PATH=/opt/render/project/src/.playwright-browsers npx playwright install chromium
+    buildCommand: bash build.sh
     startCommand: node server.js
     plan: free
     envVars:
