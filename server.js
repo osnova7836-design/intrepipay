@@ -361,7 +361,7 @@ app.get('/api/playwright-payment', async (req, res) => {
     return;
   }
   const { clientId, invoiceIds, type, ref, date } = req.query;
-  if (!clientId || !invoiceIds || !type || !ref || !date) {
+  if (!clientId || !invoiceIds || !type || !date) {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.flushHeaders();

@@ -1372,7 +1372,7 @@ function streamPayment(params, triggerBtn) {
 async function applyOne(invoiceNumber, amount, ref, btn) {
   const block = btn.closest('.pblock');
   const dateInput = block.querySelector('input[type=date]');
-  const paymentDate = dateInput ? dateInput.value : todayISO();
+  const paymentDate = (dateInput && dateInput.value) ? dateInput.value : todayISO();
   const typeSelect = block.querySelector('select.apply-type');
   const payType = typeSelect ? typeSelect.value : 'Check';
 
@@ -1389,7 +1389,7 @@ async function applyOne(invoiceNumber, amount, ref, btn) {
 async function applyAll(ref, co, btn) {
   const block = btn.closest('.pblock');
   const dateInput = block.querySelector('input[type=date]');
-  const paymentDate = dateInput ? dateInput.value : todayISO();
+  const paymentDate = (dateInput && dateInput.value) ? dateInput.value : todayISO();
   const typeSelect = block.querySelector('select.apply-type');
   const payType = typeSelect ? typeSelect.value : 'Check';
 
