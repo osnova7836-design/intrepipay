@@ -130,7 +130,9 @@ app.get('/api/invoices', async (req, res) => {
     let stopFetching = false;
     
     while (hasNextPage && pageCount < 50 && !stopFetching) {
-      const afterClause = cursor ? `(after: "${cursor}")` : '';
+      const afterClause = cursor
+        ? `(first: 100, after: "${cursor}", filter: { createdAt: { gte: "2026-01-01T00:00:00Z" } })`
+        : `(first: 100, filter: { createdAt: { gte: "2026-01-01T00:00:00Z" } })`;
       const query = `{
         invoices${afterClause} {
           nodes {
