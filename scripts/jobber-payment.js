@@ -355,6 +355,32 @@ async function applyJobberPayment({
     console.log(`${invoiceIds.length} invoices → ${batches.length} batches of up to ${BATCH_SIZE}`);
   }
 
+  // CDP mode: attach to an already-running Chrome so Cloudflare sees a real,
+  // previously-validated browser rather than a freshly-launched automation process.
+  const cdpUrl = process.env.CHROME_CDP_URL;
+  if (cdpUrl) {
+    console.log(`Connecting to Chrome via CDP at ${cdpUrl}...`);
+    const browser = await chromium.connectOverCDP(cdpUrl);
+    const ctx = browser.contexts()[0];
+    if (!ctx) throw new Error('No browser context found — is Chrome open with a Jobber tab?');
+    try {
+      for (let i = 0; i < batches.length; i++) {
+        const batch = batches[i];
+        if (batches.length > 1) console.log(`\n=== Batch ${i + 1} of ${batches.length} (${batch.length} invoices) ===`);
+        const page = await ctx.newPage();
+        try {
+          await applyJobberPaymentBatch(page, { clientId, invoiceIds: batch, type, ref, date, submit, navigateOnly });
+        } finally {
+          await page.close();
+        }
+      }
+    } finally {
+      await browser.close(); // disconnects Playwright without closing Chrome
+    }
+    return;
+  }
+
+  // Normal mode: launch a new Chrome/Chromium instance.
   const ctx = await launchStealthContext(headless);
   try {
     await ensureLoggedIn(ctx);
