@@ -546,11 +546,17 @@ async function loadMultiTab(input) {
       else if (row0.some(c=>c.includes('frontdoor'))) co = 'Frontdoor';
       else if (row0.some(c=>c.includes('rheem'))) co = 'Rheem';
 
-      // Extract check number and total from row 0
+      // Extract check number, total, and date from row 0
       // Row 0 format: "View Payment | Rely Home" | null | null | null | date | "Check" | checkNum | total | company | cleared
-      let ref = '', amt = '';
+      let ref = '', amt = '', payDate = '';
       row0raw.forEach((cell, idx) => {
         if (String(cell||'').toLowerCase() === 'check') {
+          // Cell before "Check" is the payment date; normalize to yyyy-mm-dd for date input
+          if (row0raw[idx-1]) {
+            const raw = String(row0raw[idx-1]);
+            const mdy = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+            payDate = mdy ? `${mdy[3]}-${mdy[1].padStart(2,'0')}-${mdy[2].padStart(2,'0')}` : raw;
+          }
           // Next cell is check number
           if (row0raw[idx+1]) ref = String(row0raw[idx+1]);
           // Cell after that is total
@@ -589,6 +595,7 @@ async function loadMultiTab(input) {
         co,
         ref,
         amt,
+        date: payDate,
         remit: remitLines.join('\n'),
         src: 'csv',
         fromSheet: sheetName
@@ -859,6 +866,7 @@ function matchPayment(payment) {
     co: payment.co,
     ref: payment.ref,
     amt: payment.amt,
+    date: payment.date || '',
     bank_match: bankMatch,
     line_items: lineItems.sort((a,b)=>parseInt(a.jobber_invoice||0)-parseInt(b.jobber_invoice||0)),
     total_paid: totalPaid,
@@ -1268,7 +1276,7 @@ function renderApplyBar(r) {
   return `<div class="apply-bar">
     <div class="apply-date">
       <span>Date</span>
-      <input type="date" id="date-${r.ref||r.co.replace(/\s/g,'')}" value="${todayISO()}">
+      <input type="date" id="date-${r.ref||r.co.replace(/\s/g,'')}" value="${r.date || todayISO()}">
     </div>
     <div class="apply-date">
       <span>Type</span>
