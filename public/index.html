@@ -352,9 +352,16 @@ async function fetchJobberInvoices() {
     const resp = await fetch('/api/invoices');
     const invoices = await resp.json();
 
-    if (invoices.error) {
-      // Token expired — reconnect
+    if (resp.status === 401) {
+      // Not authenticated — go through OAuth
       window.location.href = '/auth/jobber';
+      return;
+    }
+
+    if (invoices.error) {
+      btn.classList.remove('loading');
+      el('jobber-btn-text').textContent = 'Connect Jobber';
+      alert('Failed to load invoices: ' + (typeof invoices.error === 'string' ? invoices.error : JSON.stringify(invoices.error)));
       return;
     }
 

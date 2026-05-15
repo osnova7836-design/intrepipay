@@ -190,7 +190,8 @@ app.get('/api/invoices', async (req, res) => {
 
   } catch (err) {
     console.error('Invoice fetch error:', err);
-    res.status(500).json({ error: err.message });
+    const status = err.message === 'Not connected to Jobber' ? 401 : 500;
+    res.status(status).json({ error: err.message });
   }
 });
 
