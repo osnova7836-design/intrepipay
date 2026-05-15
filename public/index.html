@@ -792,22 +792,36 @@ function findBankMatch(payment) {
   const amt = parseFloat(String(payment.amt||'0').replace(/[$,]/g,''));
   const co = (payment.co||'').toLowerCase();
 
-  // Match by payment ID first (works for ACH payers like First American, Rheem etc.)
+  // 1. Match by explicit payment ID (ACH payers: First American, Rheem, etc.)
   if (payment.ref) {
-    const found = bankTxns.find(t=>t.paymentId&&(t.paymentId===payment.ref||t.desc.includes(payment.ref)));
-    if (found) return fmtDate(found.date)+' · '+found.desc.substring(0,40)+' · '+fmt(found.amount);
+    const byId = bankTxns.find(t=>t.paymentId&&t.paymentId===payment.ref);
+    if (byId) return fmtDate(byId.date)+' · '+byId.desc.substring(0,40)+' · '+fmt(byId.amount);
   }
 
-  // For Rely (and any payer whose checks arrive as plain mobile deposits),
-  // match purely by amount since the bank description has no company name
   if (amt > 0) {
-    // Try company + amount first (works for ACH payers with name in description)
+    // 2. Match by check/ref number in bank description + amount
+    //    (Rely mobile deposits: check # appears in the deposit description)
+    if (payment.ref) {
+      const byRefAmt = bankTxns.find(t=>t.desc.includes(payment.ref)&&Math.abs(t.amount-amt)<0.02);
+      if (byRefAmt) return fmtDate(byRefAmt.date)+' · '+byRefAmt.desc.substring(0,40)+' · '+fmt(byRefAmt.amount);
+    }
+
+    // 3. Match by company name in description + amount (non-Rely ACH payers)
     if (!co.includes('rely')) {
       const byCoAmt = bankTxns.find(t=>Math.abs(t.amount-amt)<0.02&&t.co&&co.includes(t.co.toLowerCase()));
       if (byCoAmt) return fmtDate(byCoAmt.date)+' · '+byCoAmt.desc.substring(0,40)+' · '+fmt(byCoAmt.amount);
     }
-    // Amount-only match (covers Rely mobile deposits and any untagged payer)
-    const byAmt = bankTxns.find(t=>Math.abs(t.amount-amt)<0.02);
+
+    // 4. Amount-only fallback — skip transactions tagged as a different recognized company
+    //    to avoid cross-company false matches (e.g. Rely amount matching an All County deposit)
+    const byAmt = bankTxns.find(t=>{
+      if (Math.abs(t.amount-amt)>=0.02) return false;
+      if (t.co) {
+        const tCoKey = t.co.toLowerCase().split(/\s+/).find(w=>w.length>=4);
+        if (tCoKey && !co.includes(tCoKey)) return false;
+      }
+      return true;
+    });
     if (byAmt) return fmtDate(byAmt.date)+' · '+byAmt.desc.substring(0,40)+' · '+fmt(byAmt.amount);
   }
   return null;
