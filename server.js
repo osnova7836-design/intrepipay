@@ -157,6 +157,7 @@ app.get('/api/invoices', async (req, res) => {
       const query = `{
         invoices${afterClause} {
           nodes {
+            id
             invoiceNumber
             subject
             total
