@@ -1,3 +1,6 @@
+// Must be set before requiring playwright so the browser path resolves correctly.
+if (process.env.RENDER) process.env.PLAYWRIGHT_BROWSERS_PATH = '0';
+
 const { chromium } = require('playwright');
 const path = require('path');
 const readline = require('readline');
@@ -37,7 +40,7 @@ async function launchStealthContext(headless = false) {
     ],
     ignoreDefaultArgs: ['--enable-automation'],
   };
-  if (!onRender) opts.executablePath = CHROME_PATH;
+  opts.executablePath = onRender ? chromium.executablePath() : CHROME_PATH;
 
   const ctx = await chromium.launchPersistentContext(PROFILE_DIR, opts);
   // Runs before any page script so webdriver is never observable.
