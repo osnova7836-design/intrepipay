@@ -220,39 +220,17 @@ app.get('/api/invoices', async (req, res) => {
 app.post('/api/add-line-item', async (req, res) => {
   try {
     const token = await getValidToken();
-    const { invoiceNumber, name, unitPrice, description } = req.body;
+    const { invoiceId, name, unitPrice, description } = req.body;
 
-    if (!invoiceNumber || unitPrice === undefined) {
-      return res.status(400).json({ error: 'invoiceNumber and unitPrice required' });
+    if (!invoiceId || unitPrice === undefined) {
+      return res.status(400).json({ error: 'invoiceId and unitPrice required' });
     }
-
-    const lookupQuery = `{
-      invoices(filter: { invoiceNumber: { eq: ${invoiceNumber} } }) {
-        nodes { id invoiceNumber }
-      }
-    }`;
-
-    const lookupResp = await fetch(GRAPHQL_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-        'X-JOBBER-GRAPHQL-VERSION': '2025-04-16'
-      },
-      body: JSON.stringify({ query: lookupQuery })
-    });
-
-    const lookupData = await lookupResp.json();
-    if (lookupData.errors) return res.status(400).json({ error: lookupData.errors.map(e => e.message).join(', ') });
-
-    const invoice = lookupData.data?.invoices?.nodes?.[0];
-    if (!invoice) return res.status(404).json({ error: `Invoice #${invoiceNumber} not found` });
 
     const safeName = (name || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
     const safeDesc = (description || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
     const mutation = `mutation {
       lineItemCreate(input: {
-        linkedToId: "${invoice.id}"
+        linkedToId: "${invoiceId}"
         name: "${safeName}"
         ${safeDesc ? `description: "${safeDesc}"` : ''}
         quantity: 1
@@ -279,8 +257,8 @@ app.post('/api/add-line-item', async (req, res) => {
     const userErrors = mutData.data?.lineItemCreate?.userErrors;
     if (userErrors?.length > 0) return res.status(400).json({ error: userErrors.map(e => e.message).join(', ') });
 
-    console.log(`Line item added: Invoice #${invoiceNumber} · "${name}" · $${unitPrice}`);
-    res.json({ success: true, invoiceNumber });
+    console.log(`Line item added: Invoice ${invoiceId} · "${name}" · $${unitPrice}`);
+    res.json({ success: true, invoiceId });
 
   } catch (err) {
     console.error('Add line item error:', err);

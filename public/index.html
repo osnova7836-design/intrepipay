@@ -402,6 +402,7 @@ async function fetchJobberInvoices() {
       'Client name': inv.client?.name || '',
       'jobberWebUri': inv.jobberWebUri,
       'jobberDbId': inv.jobberWebUri ? inv.jobberWebUri.split('/').pop() : '',
+      'jobberGqlId': inv.id || '',
       'clientDbId': extractNumericId(inv.client?.id),
     }));
 
@@ -1364,9 +1365,9 @@ function suggestInvoiceForDeduction(co, deductionAmount, excludeRef) {
   const eligible = jobberRows.filter(row => {
     if (String(row['Invoice #']) === String(excludeRef)) return false;
     if (row['Status'] === 'Paid') return false;
-    const clientName = (row['Client'] || '').toLowerCase();
+    const clientName = (row['Client name'] || '').toLowerCase();
     if (!coWords.some(w => clientName.includes(w))) return false;
-    const rowAmt = parseFloat(String(row['Amount'] || '0').replace(/[$,]/g, ''));
+    const rowAmt = parseFloat(String(row['Total ($)'] || '0').replace(/[$,]/g, ''));
     return rowAmt > threshold;
   });
   if (eligible.length === 0) return '';
@@ -1438,6 +1439,13 @@ function addDeductionToJobber(btn, safeDk, claimRef, matchedInvoice, amount, blo
     const confirmBtn = overlay.querySelector('#deduct-confirm-btn');
     if (!invoiceNumber) { errEl.textContent = 'Enter an invoice number.'; errEl.style.display = ''; return; }
 
+    const invRow = jobberRows.find(r => String(r['Invoice #']).trim() === invoiceNumber);
+    if (!invRow?.jobberGqlId) {
+      errEl.textContent = `Invoice #${invoiceNumber} not found in Jobber — make sure Jobber is connected and reload.`;
+      errEl.style.display = '';
+      return;
+    }
+
     confirmBtn.disabled = true;
     confirmBtn.textContent = 'Adding…';
     errEl.style.display = 'none';
@@ -1447,7 +1455,7 @@ function addDeductionToJobber(btn, safeDk, claimRef, matchedInvoice, amount, blo
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          invoiceNumber,
+          invoiceId: invRow.jobberGqlId,
           name: 'Recouped Funds',
           description: `WO #${claimRef}`,
           unitPrice: -absAmt
