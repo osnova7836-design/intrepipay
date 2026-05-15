@@ -3,9 +3,29 @@ const express = require('express');
 const fetch = require('node-fetch');
 const path = require('path');
 const fs = require('fs');
+const { EventEmitter } = require('events');
 const { applyJobberPayment } = require('./scripts/jobber-payment');
 
 let playwrightRunning = false;
+
+// ── Local-worker job queue ────────────────────────────────────────────────────
+const jobQueue = new Map();   // id → job
+const jobEvents = new EventEmitter();
+let jobIdSeq = 0;
+
+function createJob(params) {
+  const id = String(++jobIdSeq);
+  jobQueue.set(id, { id, params, status: 'pending' });
+  return id;
+}
+
+const WORKER_SECRET = process.env.WORKER_SECRET;
+function workerAuth(req, res, next) {
+  if (!WORKER_SECRET || req.headers['x-worker-secret'] !== WORKER_SECRET) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  next();
+}
 
 const app = express();
 app.use(express.json());
@@ -349,7 +369,34 @@ app.get('/api/playwright-payment', async (req, res) => {
   const send = obj => res.write(`data: ${JSON.stringify(obj)}\n\n`);
   playwrightRunning = true;
 
-  // Patch console so Playwright's log lines stream to the browser in real time.
+  // On Render: queue for local worker. Locally: run Playwright directly.
+  if (process.env.RENDER) {
+    const ids = invoiceIds.split(',').map(s => s.trim()).filter(Boolean);
+    const jobId = createJob({ clientId, invoiceIds: ids, type, ref, date });
+    send({ type: 'log', text: `Job ${jobId} queued — waiting for local worker to pick up...` });
+
+    const onLog  = text => send({ type: 'log', text });
+    const onDone = ({ success, error }) => {
+      send({ type: 'done', success, error });
+      cleanup();
+      playwrightRunning = false;
+      res.end();
+    };
+
+    jobEvents.on(`${jobId}:log`,  onLog);
+    jobEvents.on(`${jobId}:done`, onDone);
+
+    const cleanup = () => {
+      jobEvents.off(`${jobId}:log`,  onLog);
+      jobEvents.off(`${jobId}:done`, onDone);
+    };
+
+    // If the browser closes the connection before the job finishes, clean up.
+    res.on('close', () => { cleanup(); playwrightRunning = false; });
+    return;
+  }
+
+  // Local path — run Playwright directly.
   const origLog = console.log;
   const origError = console.error;
   console.log = (...args) => {
@@ -367,14 +414,7 @@ app.get('/api/playwright-payment', async (req, res) => {
     if (batchCount > 1) {
       send({ type: 'log', text: `${ids.length} invoices → ${batchCount} batches of up to 50 (Jobber limit).` });
     }
-    await applyJobberPayment({
-      clientId,
-      invoiceIds: ids,
-      type,
-      ref,
-      date,
-      submit: true,
-    });
+    await applyJobberPayment({ clientId, invoiceIds: ids, type, ref, date, submit: true });
     send({ type: 'done', success: true });
   } catch (err) {
     send({ type: 'done', success: false, error: err.message });
@@ -384,6 +424,38 @@ app.get('/api/playwright-payment', async (req, res) => {
     console.error = origError;
     res.end();
   }
+});
+
+// ── Local worker endpoints ────────────────────────────────────────────────────
+
+// Worker polls this to get the next pending job.
+app.get('/api/jobs/next', workerAuth, (req, res) => {
+  for (const [id, job] of jobQueue) {
+    if (job.status === 'pending') {
+      job.status = 'running';
+      return res.json(job);
+    }
+  }
+  res.json(null);
+});
+
+// Worker streams log lines back so they appear in the browser's SSE feed.
+app.post('/api/jobs/:id/log', workerAuth, (req, res) => {
+  const { text } = req.body;
+  jobEvents.emit(`${req.params.id}:log`, text);
+  res.json({ ok: true });
+});
+
+// Worker signals completion (success or failure).
+app.post('/api/jobs/:id/done', workerAuth, (req, res) => {
+  const { success, error } = req.body;
+  const job = jobQueue.get(req.params.id);
+  if (job) {
+    job.status = success ? 'completed' : 'failed';
+    jobQueue.delete(req.params.id);
+  }
+  jobEvents.emit(`${req.params.id}:done`, { success, error });
+  res.json({ ok: true });
 });
 
 // ── Connection status ─────────────────────────────────────────────────────────
