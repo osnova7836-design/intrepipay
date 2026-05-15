@@ -95,7 +95,6 @@ async function fillReference(page, type, ref) {
 }
 
 async function fillTransactionDate(page, date) {
-  // Normalize to MM, DD, YYYY parts for keyboard entry
   let month, day, year;
   if (/^\d{2}\/\d{2}\/\d{4}$/.test(date)) {
     [month, day, year] = date.split('/');
@@ -104,20 +103,16 @@ async function fillTransactionDate(page, date) {
   } else {
     throw new Error(`Unrecognised date format: ${date}`);
   }
-  const iso = `${year}-${month}-${day}`;
 
-  // This is input[type=text] controlled by a custom React date picker.
-  // Setting the value directly is overridden on blur — must click the day in the calendar.
+  // react-datepicker ignores programmatic .value assignment and resets on blur.
+  // Typing character-by-character through the keyboard updates its internal
+  // state correctly without needing to navigate calendar months.
   const field = page.getByLabel('Transaction Date');
-  await field.click(); // opens react-datepicker calendar
-  await page.waitForTimeout(400);
-
-  // react-datepicker day cells carry the class "react-datepicker__day".
-  // Anchored regex prevents matching "18" or "28" when we want "8".
-  const dayNum = parseInt(day, 10);
-  const dayCell = page.locator('[class*="react-datepicker__day"]')
-    .filter({ hasText: new RegExp(`^${dayNum}$`) });
-  await dayCell.first().click();
+  await field.click();
+  await page.waitForTimeout(300);
+  await page.keyboard.press('Control+a');
+  await page.keyboard.type(`${month}/${day}/${year}`, { delay: 50 });
+  await page.keyboard.press('Tab');
   await page.waitForTimeout(300);
 }
 
