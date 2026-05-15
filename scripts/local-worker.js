@@ -58,7 +58,13 @@ async function poll() {
   const fetch = require('node-fetch');
   try {
     const res = await fetch(`${RENDER_URL}/api/jobs/next`, { headers });
-    if (!res.ok) { console.error('Worker auth failed — check WORKER_SECRET'); return; }
+    if (!res.ok) {
+      const body = await res.text();
+      console.error(`Auth failed — status ${res.status}, body: ${body.slice(0, 200)}`);
+      console.error(`  RENDER_URL:     ${RENDER_URL}`);
+      console.error(`  WORKER_SECRET:  ${WORKER_SECRET}`);
+      return;
+    }
     const job = await res.json();
     if (job) await runJob(job);
   } catch (err) {

@@ -458,6 +458,16 @@ app.post('/api/jobs/:id/done', workerAuth, (req, res) => {
   res.json({ ok: true });
 });
 
+// Temporary: lets us verify WORKER_SECRET is loaded on Render without revealing it.
+app.get('/api/worker-debug', (req, res) => {
+  res.json({
+    workerSecretSet: !!WORKER_SECRET,
+    workerSecretLength: WORKER_SECRET ? WORKER_SECRET.length : 0,
+    receivedSecret: req.headers['x-worker-secret'] || '(none)',
+    match: req.headers['x-worker-secret'] === WORKER_SECRET,
+  });
+});
+
 // ── Connection status ─────────────────────────────────────────────────────────
 app.get('/api/status', (req, res) => {
   res.json({
