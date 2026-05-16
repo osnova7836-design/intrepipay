@@ -1364,6 +1364,7 @@ function suggestInvoiceForDeduction(matchedItems, deductionAmount, excludeRef) {
   const absAmt = Math.abs(deductionAmount);
   const eligible = matchedItems.filter(item => {
     if (String(item.jobber_invoice) === String(excludeRef)) return false;
+    if (item.jobber_status === 'Paid') return false;
     const rowAmt = parseFloat(String(item.jobber_amount || '0'));
     return rowAmt > absAmt;
   });
