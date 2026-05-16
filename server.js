@@ -236,8 +236,7 @@ app.post('/api/add-line-item', async (req, res) => {
     const safeName = (name || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
     const safeDesc = (description || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
     const mutation = `mutation {
-      invoiceEdit(input: {
-        id: "${invoiceId}"
+      invoiceEdit(invoiceId: "${invoiceId}", input: {
         lineItems: [
           {
             name: "${safeName}"
@@ -500,19 +499,27 @@ app.get('/api/playwright-payment', async (req, res) => {
   }
 });
 
-// ── Jobber schema probe (find available mutations) ────────────────────────────
-app.get('/api/jobber-mutations', async (req, res) => {
+// ── Jobber schema probe ───────────────────────────────────────────────────────
+app.get('/api/jobber-schema', async (req, res) => {
   try {
     const token = await getValidToken();
-    const query = `{ __schema { mutationType { fields { name } } } }`;
+    // Introspect InvoiceEditInput to find valid line-item field names
+    const query = `{
+      invoiceEditInput: __type(name: "InvoiceEditInput") {
+        inputFields { name type { name kind ofType { name kind } } }
+      }
+      mutations: __schema { mutationType { fields { name } } }
+    }`;
     const response = await fetch(GRAPHQL_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}`, 'X-JOBBER-GRAPHQL-VERSION': '2025-04-16' },
       body: JSON.stringify({ query })
     });
     const data = await response.json();
-    const all = data.data?.__schema?.mutationType?.fields?.map(f => f.name) || [];
-    res.json({ all, total: all.length });
+    const inputFields = data.data?.invoiceEditInput?.inputFields?.map(f => f.name) || [];
+    const allMutations = data.data?.mutations?.mutationType?.fields?.map(f => f.name) || [];
+    const lineItemMutations = allMutations.filter(n => /line|item|invoice/i.test(n));
+    res.json({ invoiceEditInputFields: inputFields, lineItemMutations });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
