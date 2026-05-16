@@ -262,7 +262,20 @@ app.post('/api/add-line-item', async (req, res) => {
     });
 
     const mutData = await mutResp.json();
-    if (mutData.errors) return res.status(400).json({ error: mutData.errors.map(e => e.message).join(', ') });
+    if (mutData.errors) {
+      // Auto-introspect InvoiceEditInput so we know valid field names
+      let fields = [];
+      try {
+        const ir = await fetch(GRAPHQL_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}`, 'X-JOBBER-GRAPHQL-VERSION': '2025-04-16' },
+          body: JSON.stringify({ query: `{ __type(name: "InvoiceEditInput") { inputFields { name } } }` })
+        });
+        const id = await ir.json();
+        fields = id.data?.__type?.inputFields?.map(f => f.name) || [];
+      } catch (_) {}
+      return res.status(400).json({ error: mutData.errors.map(e => e.message).join(', '), invoiceEditInputFields: fields });
+    }
 
     const userErrors = mutData.data?.invoiceEdit?.userErrors;
     if (userErrors?.length > 0) return res.status(400).json({ error: userErrors.map(e => e.message).join(', ') });
