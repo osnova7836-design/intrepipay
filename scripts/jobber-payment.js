@@ -13,11 +13,10 @@ const BATCH_SIZE = 50; // Jobber rejects payment applications with more than 50 
 function buildPaymentUrl({ clientId, invoiceIds }) {
   const u = new URL('/payments/new', JOBBER_ORIGIN);
   u.searchParams.set('clientId', clientId);
-  // Pass all IDs — Jobber pre-selects them on load, avoiding deep checkbox clicks
-  for (const id of invoiceIds) {
-    u.searchParams.append('invoiceId', id);
-  }
-  u.searchParams.set('order', 'ASCENDING');
+  u.searchParams.set('invoiceId', invoiceIds[0]); // First ID pre-selects on load
+  // DESCENDING puts newest invoices at the top — target invoices are recent so
+  // they land at low indices (< 50) instead of deep in the virtual list (200+)
+  u.searchParams.set('order', 'DESCENDING');
   u.searchParams.set('sort', 'DUE_DATE');
   return u.toString();
 }
@@ -219,16 +218,6 @@ async function dumpCheckboxRows(page) {
 }
 
 async function ensureInvoicesChecked(page, invoiceIds) {
-  // Fast path: if Jobber pre-selected all invoices from the URL, nothing to click.
-  const preCheckedCount = await page.evaluate(() =>
-    Array.from(document.querySelectorAll('input[type="checkbox"]')).filter(cb => cb.checked).length
-  );
-  if (preCheckedCount >= invoiceIds.length) {
-    console.log(`  All ${invoiceIds.length} invoices pre-selected by Jobber URL — skipping checkbox clicks`);
-    return;
-  }
-  console.log(`  ${preCheckedCount} of ${invoiceIds.length} pre-selected — will click the rest`);
-
   const indices = {};
 
   for (const id of invoiceIds) {
