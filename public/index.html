@@ -216,6 +216,7 @@ tr:hover td{background:var(--surface2)}
         <div class="uz-sub">Excel or CSV · BofA format</div>
       </div>
       <div class="status-line" id="bs"></div>
+      <div id="bank-pull-list" style="display:none;margin-top:.75rem"></div>
     </div>
 
     <div class="divider"></div>
@@ -481,8 +482,36 @@ async function loadBank(input) {
     el('bt').textContent = '✓ ' + file.name;
     const bs = el('bs'); bs.style.display=''; bs.textContent = `${bankTxns.length} credit deposits loaded`;
     el('s2').classList.add('done');
+    renderBankPullList();
   } catch(e) { el('bt').textContent = '⚠ Error reading file'; }
   input.value=''; checkReady();
+}
+
+function renderBankPullList() {
+  const container = document.getElementById('bank-pull-list');
+  if (!bankTxns.length) { container.style.display = 'none'; return; }
+
+  const rows = bankTxns.map((t, i) => {
+    const name = t.co || t.desc.substring(0, 38);
+    const date = fmtDate(t.date);
+    const payRef = t.paymentId ? `<span style="color:var(--text-muted);margin-left:.375rem">#${t.paymentId}</span>` : '';
+    return `
+      <label style="display:flex;align-items:center;gap:.625rem;padding:.4rem 0;border-bottom:1px solid rgba(255,255,255,0.05);cursor:pointer">
+        <input type="checkbox" data-pull="${i}"
+          style="width:14px;height:14px;accent-color:var(--teal);flex-shrink:0;cursor:pointer"
+          onchange="this.closest('label').style.opacity=this.checked?'0.4':'1'">
+        <span style="flex:1;font-family:'IBM Plex Mono',monospace;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${name}${payRef}</span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--text-muted);flex-shrink:0">${date}</span>
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;color:#86efac;flex-shrink:0">${fmt(t.amount)}</span>
+      </label>`;
+  }).join('');
+
+  container.style.display = '';
+  container.innerHTML = `
+    <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;text-transform:uppercase;letter-spacing:.08em;color:var(--text-muted);margin-bottom:.35rem">
+      Remittances to pull — ${bankTxns.length} deposit${bankTxns.length !== 1 ? 's' : ''}
+    </div>
+    ${rows}`;
 }
 
 function getBankCo(desc) {
