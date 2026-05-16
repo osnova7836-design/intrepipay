@@ -13,7 +13,10 @@ const BATCH_SIZE = 50; // Jobber rejects payment applications with more than 50 
 function buildPaymentUrl({ clientId, invoiceIds }) {
   const u = new URL('/payments/new', JOBBER_ORIGIN);
   u.searchParams.set('clientId', clientId);
-  u.searchParams.set('invoiceId', invoiceIds[0]); // First ID pre-selects on load
+  // Pass all IDs — Jobber pre-selects them on load, avoiding deep checkbox clicks
+  for (const id of invoiceIds) {
+    u.searchParams.append('invoiceId', id);
+  }
   u.searchParams.set('order', 'ASCENDING');
   u.searchParams.set('sort', 'DUE_DATE');
   return u.toString();
@@ -216,6 +219,16 @@ async function dumpCheckboxRows(page) {
 }
 
 async function ensureInvoicesChecked(page, invoiceIds) {
+  // Fast path: if Jobber pre-selected all invoices from the URL, nothing to click.
+  const preCheckedCount = await page.evaluate(() =>
+    Array.from(document.querySelectorAll('input[type="checkbox"]')).filter(cb => cb.checked).length
+  );
+  if (preCheckedCount >= invoiceIds.length) {
+    console.log(`  All ${invoiceIds.length} invoices pre-selected by Jobber URL — skipping checkbox clicks`);
+    return;
+  }
+  console.log(`  ${preCheckedCount} of ${invoiceIds.length} pre-selected — will click the rest`);
+
   const indices = {};
 
   for (const id of invoiceIds) {
@@ -231,7 +244,6 @@ async function ensureInvoicesChecked(page, invoiceIds) {
 
   const notFound = invoiceIds.filter((id) => indices[id] === undefined);
   if (notFound.length > 0) {
-    // Check if Jobber pre-selected all of them via the multi-invoiceId URL.
     // Count checked checkboxes and match them to our list in order.
     const checkedIndices = await page.evaluate(() =>
       Array.from(document.querySelectorAll('input[type="checkbox"]'))
@@ -242,7 +254,6 @@ async function ensureInvoicesChecked(page, invoiceIds) {
     console.log(`  Pre-checked checkbox indices: ${checkedIndices.join(', ')}`);
 
     if (checkedIndices.length === invoiceIds.length) {
-      // Jobber pre-selected exactly the right number — trust the order
       console.log('  Count matches — using pre-selected indices.');
       invoiceIds.forEach((id, i) => { indices[id] = checkedIndices[i]; });
     } else {
@@ -255,14 +266,31 @@ async function ensureInvoicesChecked(page, invoiceIds) {
     }
   }
 
+  const paymentUrl = page.url();
+
   for (const [id, idx] of Object.entries(indices)) {
     const cb = page.locator('input[type="checkbox"]').nth(Number(idx));
-    if (await cb.isChecked()) {
+    if (await cb.isChecked().catch(() => false)) {
       console.log(`  Invoice ${id} (index ${idx}) already checked`);
-    } else {
-      await cb.check({ force: true });
-      console.log(`  Invoice ${id} (index ${idx}) checked`);
+      continue;
     }
+
+    // Use JS dispatch to avoid Playwright waiting for a navigation that may not settle.
+    await page.evaluate((i) => {
+      const cb = document.querySelectorAll('input[type="checkbox"]')[i];
+      if (cb && !cb.checked) cb.click();
+    }, Number(idx));
+    await page.waitForTimeout(400);
+
+    // If Jobber's SPA navigated away (known issue at deep indices), go back and verify.
+    if (page.url() !== paymentUrl) {
+      console.log(`  ⚠ SPA navigated away after checkbox ${idx} — returning to payment page`);
+      await page.goto(paymentUrl, { waitUntil: 'load' });
+      await page.waitForSelector('select, input[type="text"]', { timeout: 30000 });
+      await page.waitForTimeout(1000);
+    }
+
+    console.log(`  Invoice ${id} (index ${idx}) clicked`);
   }
 }
 
