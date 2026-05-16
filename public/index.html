@@ -1567,6 +1567,7 @@ function streamPayment(params, triggerBtn, invoiceNumbers = []) {
       finish();
       resultEl.style.display = '';
       if (msg.success) {
+        markInvoicesPaid(invoiceNumbers);
         resultEl.innerHTML = `<div style="background:#15803d;border-radius:6px;padding:.75rem 1rem;font-family:'IBM Plex Mono',monospace;font-size:12px;color:#fff;letter-spacing:0.04em">✓ Payment submitted successfully</div>`;
         if (triggerBtn) { triggerBtn.textContent = '✓ Applied'; triggerBtn.disabled = true; }
       } else {
@@ -1580,6 +1581,30 @@ function streamPayment(params, triggerBtn, invoiceNumbers = []) {
     appendLog('⚠ Connection lost — check /api/queue-status and Render logs');
     finish();
   };
+}
+
+function markInvoicesPaid(invoiceNumbers) {
+  if (!invoiceNumbers?.length) return;
+  const nums = new Set(invoiceNumbers.map(String));
+
+  // Update jobberRows so skip-paid logic stays correct
+  for (const row of jobberRows) {
+    if (nums.has(String(row['Invoice #']))) row['Status'] = 'Paid';
+  }
+  // Update _lastResults so suggestInvoiceForDeduction excludes them
+  for (const result of (window._lastResults || [])) {
+    for (const item of result.line_items) {
+      if (nums.has(String(item.jobber_invoice))) item.jobber_status = 'Paid';
+    }
+  }
+  // Update DOM status badge for each invoice row
+  document.querySelectorAll('td.amt').forEach(td => {
+    const text = td.textContent.trim();
+    if (text.startsWith('#') && nums.has(text.slice(1))) {
+      const statusTd = td.nextElementSibling;
+      if (statusTd) statusTd.innerHTML = '<span class="badge b-match">Paid</span>';
+    }
+  });
 }
 
 function confirmPaymentDate(paymentDate, count, onConfirm, skipNote = '') {
@@ -1622,7 +1647,7 @@ async function applyOne(invoiceNumber, amount, ref, btn) {
 
   confirmPaymentDate(paymentDate, 1, date => {
     const params = new URLSearchParams({ clientId: row.clientDbId, invoiceIds: row.jobberDbId, type: payType, ref: ref || '', date });
-    streamPayment(params, btn);
+    streamPayment(params, btn, [invoiceNumber]);
   });
 }
 
