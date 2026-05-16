@@ -236,7 +236,7 @@ app.post('/api/add-line-item', async (req, res) => {
     const safeName = (name || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
     const safeDesc = (description || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
     const mutation = `mutation {
-      invoiceUpdate(input: {
+      invoiceEdit(input: {
         id: "${invoiceId}"
         lineItems: [
           {
@@ -265,7 +265,7 @@ app.post('/api/add-line-item', async (req, res) => {
     const mutData = await mutResp.json();
     if (mutData.errors) return res.status(400).json({ error: mutData.errors.map(e => e.message).join(', ') });
 
-    const userErrors = mutData.data?.invoiceUpdate?.userErrors;
+    const userErrors = mutData.data?.invoiceEdit?.userErrors;
     if (userErrors?.length > 0) return res.status(400).json({ error: userErrors.map(e => e.message).join(', ') });
 
     console.log(`Line item added: Invoice ${invoiceId} · "${name}" · $${unitPrice}`);
