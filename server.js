@@ -496,6 +496,25 @@ app.get('/api/playwright-payment', async (req, res) => {
   }
 });
 
+// ── Jobber schema probe (find available mutations) ────────────────────────────
+app.get('/api/jobber-mutations', async (req, res) => {
+  try {
+    const token = await getValidToken();
+    const query = `{ __schema { mutationType { fields { name } } } }`;
+    const response = await fetch(GRAPHQL_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}`, 'X-JOBBER-GRAPHQL-VERSION': '2025-04-16' },
+      body: JSON.stringify({ query })
+    });
+    const data = await response.json();
+    const all = data.data?.__schema?.mutationType?.fields?.map(f => f.name) || [];
+    const relevant = all.filter(n => /line|invoice|item/i.test(n));
+    res.json({ relevant, total: all.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Queue status / reset ──────────────────────────────────────────────────────
 app.get('/api/queue-status', (req, res) => {
   res.json({

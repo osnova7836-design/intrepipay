@@ -1315,12 +1315,12 @@ function renderApplyBar(r) {
         const safeDk = dk.replace(/[^a-zA-Z0-9_]/g, '_');
         const invNum = d.jobber_invoice || '';
         return `<div class="deduction-item" id="ditem-${safeDk}">
-          <span class="deduction-item-info">Claim #${d.ref} · ${fmt(d.amount)}</span>
+          <span class="deduction-item-info">Claim #${d.ref} · ${fmt(d.remittance_amount)}</span>
           ${invNum
             ? `<span class="deduction-item-inv">→ Invoice #${invNum}</span>`
             : `<span style="color:var(--amber);font-family:'IBM Plex Mono',monospace;font-size:11px">No invoice matched</span>`}
           <button class="btn-add-deduction" id="dbtn-${safeDk}"
-            onclick="addDeductionToJobber(this,'${safeDk}','${d.ref}','${invNum}',${d.amount},'${blockKey}')">
+            onclick="addDeductionToJobber(this,'${safeDk}','${d.ref}','${invNum}',${d.remittance_amount},'${blockKey}')">
             + Add to Jobber
           </button>
           <span id="dok-${safeDk}" style="display:none;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--green)">✓ Added</span>
