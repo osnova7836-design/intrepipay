@@ -1358,21 +1358,19 @@ function renderApplyBar(r) {
   </div>`;
 }
 
-function suggestInvoiceForDeduction(clientDbId, deductionAmount, excludeRef) {
+function suggestInvoiceForDeduction(matchedItems, deductionAmount, excludeRef) {
+  // Must suggest an invoice already in this payment batch — the deduction reduces
+  // the check total so the line item has to live on one of the invoices being paid now.
   const absAmt = Math.abs(deductionAmount);
-  const threshold = absAmt + 10;
-  const eligible = jobberRows.filter(row => {
-    if (String(row['Invoice #']) === String(excludeRef)) return false;
-    if (row['Status'] === 'Paid') return false;
-    if (clientDbId && row['clientDbId'] !== clientDbId) return false;
-    const rowAmt = parseFloat(String(row['Total ($)'] || '0').replace(/[$,]/g, ''));
-    return rowAmt > threshold;
+  const eligible = matchedItems.filter(item => {
+    if (String(item.jobber_invoice) === String(excludeRef)) return false;
+    const rowAmt = parseFloat(String(item.jobber_amount || '0'));
+    return rowAmt > absAmt;
   });
   if (eligible.length === 0) return '';
-  eligible.sort((a, b) =>
-    parseFloat(String(a['Total ($)']).replace(/[$,]/g,'')) - parseFloat(String(b['Total ($)']).replace(/[$,]/g,''))
-  );
-  return String(eligible[0]['Invoice #']);
+  // Prefer the invoice with the largest balance (most room to absorb the deduction)
+  eligible.sort((a, b) => (b.jobber_amount || 0) - (a.jobber_amount || 0));
+  return String(eligible[0].jobber_invoice);
 }
 
 function checkDeductionsResolved(blockKey, totalDeductions) {
@@ -1402,14 +1400,8 @@ function addDeductionToJobber(btn, safeDk, claimRef, matchedInvoice, amount, blo
     const bk = (r.ref || r.co || '').replace(/[^a-zA-Z0-9]/g, '_');
     return bk === blockKey;
   });
-  // Resolve clientDbId from any already-matched invoice in this block
-  let clientDbId = null;
   const matchedInBlock = result?.line_items?.filter(i => i.status === 'match' || i.status === 'shortpay' || i.status === 'overpay') || [];
-  for (const item of matchedInBlock) {
-    const r = jobberRows.find(r => String(r['Invoice #']).trim() === String(item.jobber_invoice).trim());
-    if (r?.clientDbId) { clientDbId = r.clientDbId; break; }
-  }
-  const suggested = suggestInvoiceForDeduction(clientDbId, amount, matchedInvoice) || '';
+  const suggested = suggestInvoiceForDeduction(matchedInBlock, amount, matchedInvoice) || '';
 
   const overlay = document.createElement('div');
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.72);z-index:300;display:flex;align-items:center;justify-content:center;padding:1rem';
