@@ -199,7 +199,7 @@ app.get('/api/invoices', async (req, res) => {
       pageCount++;
 
       const lastInv = page.nodes[page.nodes.length - 1];
-      if (lastInv && parseInt(lastInv.invoiceNumber) < 15000) stopFetching = true;
+      if (lastInv && parseInt(lastInv.invoiceNumber) < 12000) stopFetching = true;
 
       if (hasNextPage) await new Promise(r => setTimeout(r, 300));
 
