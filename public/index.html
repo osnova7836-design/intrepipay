@@ -1413,81 +1413,55 @@ function addDeductionToJobber(btn, safeDk, claimRef, matchedInvoice, amount, blo
         WO #${claimRef} · <span style="color:#f87171">−${fmt(absAmt)}</span>
       </div>
       <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--text-muted);margin-bottom:.4rem;text-transform:uppercase;letter-spacing:.06em">
-        Add "Recouped Funds" line item to invoice #
+        Target invoice #
       </div>
       <input id="deduct-inv-input" type="text" value="${suggested}" placeholder="Invoice number"
-        style="background:var(--surface);border:1px solid var(--teal);border-radius:6px;color:var(--text);font-family:'IBM Plex Mono',monospace;font-size:14px;padding:8px 10px;width:100%;margin-bottom:.5rem">
-      ${suggested ? `<div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--text-muted);margin-bottom:1rem">
-        Suggested: open invoice with balance &gt; ${fmt(absAmt + 10)}
-      </div>` : `<div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--amber);margin-bottom:1rem">
-        No eligible invoice found — enter invoice # manually
-      </div>`}
+        style="background:var(--surface);border:1px solid var(--teal);border-radius:6px;color:var(--text);font-family:'IBM Plex Mono',monospace;font-size:14px;padding:8px 10px;width:100%;margin-bottom:.75rem">
+      <div style="background:#0f172a;border-radius:8px;padding:.75rem 1rem;margin-bottom:1rem;font-family:'IBM Plex Mono',monospace;font-size:11px;line-height:1.8">
+        <div style="color:var(--text-muted);font-size:9px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:.4rem">Add this line item in Jobber</div>
+        <div><span style="color:var(--text-muted)">Title:</span> <span style="color:#fff">Recouped Funds</span></div>
+        <div><span style="color:var(--text-muted)">Description:</span> <span style="color:#fff">WO #${claimRef}</span></div>
+        <div><span style="color:var(--text-muted)">Amount:</span> <span style="color:#f87171">−${fmt(absAmt)}</span></div>
+      </div>
       <div id="deduct-err" style="display:none;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#f87171;margin-bottom:.75rem"></div>
-      <div style="display:flex;gap:8px;justify-content:flex-end">
+      <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
         <button onclick="this.closest('[style*=fixed]').remove()"
           style="padding:7px 14px;border-radius:6px;font-family:'IBM Plex Mono',monospace;font-size:10px;cursor:pointer;letter-spacing:.06em;text-transform:uppercase;border:1px solid rgba(255,255,255,0.2);background:transparent;color:var(--text)">Cancel</button>
+        <button id="deduct-open-btn"
+          style="padding:7px 14px;border-radius:6px;font-family:'IBM Plex Mono',monospace;font-size:10px;cursor:pointer;letter-spacing:.06em;text-transform:uppercase;border:none;background:#1e3a5f;color:#93c5fd;font-weight:500">Open in Jobber ↗</button>
         <button id="deduct-confirm-btn"
-          style="padding:7px 14px;border-radius:6px;font-family:'IBM Plex Mono',monospace;font-size:10px;cursor:pointer;letter-spacing:.06em;text-transform:uppercase;border:none;background:#92400e;color:#fef3c7;font-weight:500">Add to Jobber</button>
+          style="padding:7px 14px;border-radius:6px;font-family:'IBM Plex Mono',monospace;font-size:10px;cursor:pointer;letter-spacing:.06em;text-transform:uppercase;border:none;background:#92400e;color:#fef3c7;font-weight:500">Mark as Added ✓</button>
       </div>
     </div>`;
   document.body.appendChild(overlay);
 
-  overlay.querySelector('#deduct-confirm-btn').onclick = async () => {
+  // Open in Jobber button — looks up the invoice URL and opens it
+  overlay.querySelector('#deduct-open-btn').onclick = () => {
     const invoiceNumber = overlay.querySelector('#deduct-inv-input').value.trim();
     const errEl = overlay.querySelector('#deduct-err');
-    const confirmBtn = overlay.querySelector('#deduct-confirm-btn');
+    const invRow = jobberRows.find(r => String(r['Invoice #']).trim() === invoiceNumber);
+    if (!invRow?.jobberWebUri) {
+      errEl.textContent = invoiceNumber
+        ? `Invoice #${invoiceNumber} not found — check the number.`
+        : 'Enter an invoice number first.';
+      errEl.style.display = '';
+      return;
+    }
+    errEl.style.display = 'none';
+    window.open(invRow.jobberWebUri, '_blank');
+  };
+
+  overlay.querySelector('#deduct-confirm-btn').onclick = () => {
+    const invoiceNumber = overlay.querySelector('#deduct-inv-input').value.trim();
+    const errEl = overlay.querySelector('#deduct-err');
     if (!invoiceNumber) { errEl.textContent = 'Enter an invoice number.'; errEl.style.display = ''; return; }
 
-    const invRow = jobberRows.find(r => String(r['Invoice #']).trim() === invoiceNumber);
-    if (!invRow) {
-      errEl.textContent = `Invoice #${invoiceNumber} not found in the ${jobberRows.length} loaded invoices — check the number and try again.`;
-      errEl.style.display = '';
-      return;
-    }
-    if (!invRow.jobberGqlId) {
-      errEl.textContent = `Invoice #${invoiceNumber} found but missing its Jobber ID — please disconnect and reconnect Jobber, then try again.`;
-      errEl.style.display = '';
-      return;
-    }
-
-    confirmBtn.disabled = true;
-    confirmBtn.textContent = 'Adding…';
-    errEl.style.display = 'none';
-
-    try {
-      const resp = await fetch('/api/add-line-item', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          invoiceId: invRow.jobberGqlId,
-          name: 'Recouped Funds',
-          description: `WO #${claimRef}`,
-          unitPrice: -absAmt
-        })
-      });
-      const data = await resp.json();
-      if (!resp.ok || data.error) {
-        errEl.textContent = (data.error || 'Failed to add line item') +
-          (data.invoiceEditInputFields?.length ? ' | Line-item mutations available: ' + data.invoiceEditInputFields.join(', ') : '');
-        errEl.style.display = '';
-        confirmBtn.disabled = false;
-        confirmBtn.textContent = 'Add to Jobber';
-        return;
-      }
-      // Success
-      overlay.remove();
-      resolvedDeductions.add(safeDk);
-      document.getElementById(`dbtn-${safeDk}`)?.remove();
-      const okEl = document.getElementById(`dok-${safeDk}`);
-      if (okEl) { okEl.style.display = ''; okEl.textContent = `✓ Added to Invoice #${invoiceNumber}`; }
-      // Check if all deductions in this block are now resolved
-      checkDeductionsResolved(blockKey);
-    } catch (err) {
-      errEl.textContent = err.message;
-      errEl.style.display = '';
-      confirmBtn.disabled = false;
-      confirmBtn.textContent = 'Add to Jobber';
-    }
+    overlay.remove();
+    resolvedDeductions.add(safeDk);
+    document.getElementById(`dbtn-${safeDk}`)?.remove();
+    const okEl = document.getElementById(`dok-${safeDk}`);
+    if (okEl) { okEl.style.display = ''; okEl.textContent = `✓ Added to Invoice #${invoiceNumber}`; }
+    checkDeductionsResolved(blockKey);
   };
 }
 
