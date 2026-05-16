@@ -8,6 +8,11 @@ const { applyJobberPayment } = require('./scripts/jobber-payment');
 
 let playwrightRunning = false;
 
+// ── Invoice cache (avoids re-fetching on every Jobber reconnect) ──────────────
+let invoiceCache = null;
+let invoiceCacheTime = 0;
+const INVOICE_CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+
 // ── Local-worker job queue ────────────────────────────────────────────────────
 const jobQueue = new Map();   // id → job
 const jobEvents = new EventEmitter();
@@ -144,12 +149,18 @@ app.get('/api/invoices', async (req, res) => {
   try {
     const token = await getValidToken();
 
+    // Serve from cache if still fresh and no force-refresh requested
+    if (invoiceCache && !req.query.refresh && (Date.now() - invoiceCacheTime) < INVOICE_CACHE_TTL) {
+      console.log(`Serving ${invoiceCache.length} invoices from cache (age ${Math.round((Date.now()-invoiceCacheTime)/1000)}s)`);
+      return res.json(invoiceCache);
+    }
+
     let allInvoices = [];
     let hasNextPage = true;
     let cursor = null;
     let pageCount = 0;
     let stopFetching = false;
-    
+
     while (hasNextPage && pageCount < 20 && !stopFetching) {
       const afterClause = cursor
         ? `(first: 250, after: "${cursor}", filter: { createdAt: { after: "2025-12-31T23:59:59Z" } })`
@@ -188,8 +199,19 @@ app.get('/api/invoices', async (req, res) => {
       const data = await response.json();
 
       if (data.errors) {
+        const isThrottled = data.errors.some(e => e.extensions?.code === 'THROTTLED');
+        if (isThrottled) {
+          if (allInvoices.length > 0) {
+            // Return what we have so far rather than failing entirely
+            console.warn(`Throttled after ${allInvoices.length} invoices — returning partial cache`);
+            invoiceCache = allInvoices;
+            invoiceCacheTime = Date.now();
+            return res.json(allInvoices);
+          }
+          return res.status(429).json({ error: 'Jobber API rate limit hit. Wait 60 seconds and try again.' });
+        }
         console.error('GraphQL errors:', JSON.stringify(data.errors));
-        return res.status(400).json({ error: data.errors });
+        return res.status(400).json({ error: data.errors.map(e => e.message).join(', ') });
       }
 
       const page = data.data.invoices;
@@ -201,12 +223,14 @@ app.get('/api/invoices', async (req, res) => {
       const lastInv = page.nodes[page.nodes.length - 1];
       if (lastInv && parseInt(lastInv.invoiceNumber) < 12000) stopFetching = true;
 
-      if (hasNextPage) await new Promise(r => setTimeout(r, 300));
+      if (hasNextPage && !stopFetching) await new Promise(r => setTimeout(r, 500));
 
       console.log(`Page ${pageCount}: ${page.nodes.length} invoices, hasNextPage: ${hasNextPage}, total: ${allInvoices.length}`);
     }
 
     console.log(`Done. Total invoices fetched: ${allInvoices.length}`);
+    invoiceCache = allInvoices;
+    invoiceCacheTime = Date.now();
     res.json(allInvoices);
 
   } catch (err) {
@@ -487,6 +511,13 @@ app.get('/api/playwright-payment', async (req, res) => {
     console.error = origError;
     res.end();
   }
+});
+
+// ── Invoice cache reset ───────────────────────────────────────────────────────
+app.post('/api/invoices/cache-clear', (req, res) => {
+  invoiceCache = null;
+  invoiceCacheTime = 0;
+  res.json({ ok: true, message: 'Invoice cache cleared — next connect will fetch fresh data' });
 });
 
 // ── Queue status / reset ──────────────────────────────────────────────────────
