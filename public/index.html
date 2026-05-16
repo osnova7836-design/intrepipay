@@ -1506,7 +1506,7 @@ function todayISO() {
   return new Date().toISOString().split('T')[0];
 }
 
-function streamPayment(params, triggerBtn) {
+function streamPayment(params, triggerBtn, invoiceNumbers = []) {
   const overlay = document.createElement('div');
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:200;display:flex;align-items:center;justify-content:center;padding:1rem';
   overlay.innerHTML = `
@@ -1530,6 +1530,13 @@ function streamPayment(params, triggerBtn) {
   const resultEl = overlay.querySelector('#sse-result');
   const closeBtn = overlay.querySelector('#sse-close');
   const spinner  = overlay.querySelector('#sse-spinner');
+
+  if (invoiceNumbers.length > 0) {
+    const header = document.createElement('div');
+    header.style.cssText = 'color:rgba(255,255,255,0.35);margin-bottom:.5rem;line-height:1.6';
+    header.textContent = `Invoices: ${invoiceNumbers.map(n => '#' + n).join(', ')}`;
+    logEl.appendChild(header);
+  }
 
   const appendLog = text => {
     const d = document.createElement('div');
@@ -1635,6 +1642,7 @@ async function applyAll(ref, co, btn) {
   if (matchedItems.length === 0) return;
 
   const invoiceDbIds = [];
+  const invoiceNumbers = [];
   let clientDbId = null;
   let skippedPaid = 0;
   for (const item of matchedItems) {
@@ -1645,6 +1653,7 @@ async function applyAll(ref, co, btn) {
     }
     if (row['Status'] === 'Paid') { skippedPaid++; continue; }
     invoiceDbIds.push(row.jobberDbId);
+    invoiceNumbers.push(item.jobber_invoice);
     if (!clientDbId) clientDbId = row.clientDbId;
   }
   if (invoiceDbIds.length === 0) {
@@ -1658,7 +1667,7 @@ async function applyAll(ref, co, btn) {
   const skipNote = skippedPaid > 0 ? ` — ${skippedPaid} already Paid, skipped` : '';
   confirmPaymentDate(paymentDate, invoiceDbIds.length, date => {
     const params = new URLSearchParams({ clientId: clientDbId, invoiceIds: invoiceDbIds.join(','), type: payType, ref: ref || '', date });
-    streamPayment(params, btn);
+    streamPayment(params, btn, invoiceNumbers);
   }, skipNote);
 }
 </script>
