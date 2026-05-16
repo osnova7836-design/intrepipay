@@ -532,6 +532,8 @@ async function loadMultiTab(input) {
   const file = input.files[0]; if (!file) return;
   el('mtz').classList.add('has-file');
   el('mt-title').textContent = '⟳ Reading ' + file.name + '...';
+  _remitFileName = file.name;
+  _loadResolvedDeductions(_remitFileName);
 
   try {
     const buf = await file.arrayBuffer();
@@ -946,6 +948,7 @@ async function run() {
 
   window._lastResults = results;
   renderReport(results);
+  _restoreResolvedUI();
   btn.disabled=false; btn.textContent='▶ Run reconciliation';
 }
 
@@ -1289,6 +1292,39 @@ window._apiKey = localStorage.getItem('ip_key')||'';
 if (window._apiKey) { setTimeout(()=>{ el('key-btn').textContent='🔑 Key ✓'; el('key-btn').style.color='#00c9a7'; },100); }
 
 const resolvedDeductions = new Set();
+let _remitFileName = '';
+
+function _saveResolvedDeductions() {
+  if (!_remitFileName) return;
+  try { localStorage.setItem('ip_deductions_' + _remitFileName, JSON.stringify([...resolvedDeductions])); } catch(_) {}
+}
+function _loadResolvedDeductions(fileName) {
+  resolvedDeductions.clear();
+  try {
+    const saved = JSON.parse(localStorage.getItem('ip_deductions_' + fileName) || '[]');
+    saved.forEach(k => resolvedDeductions.add(k));
+  } catch(_) {}
+}
+function _restoreResolvedUI() {
+  for (const dk of resolvedDeductions) {
+    const safeDk = dk.replace(/[^a-zA-Z0-9_]/g, '_');
+    document.getElementById(`dbtn-${safeDk}`)?.remove();
+    const okEl = document.getElementById(`dok-${safeDk}`);
+    if (okEl) { okEl.style.display = ''; if (okEl.textContent === '✓ Added') okEl.textContent = '✓ Added (prior session)'; }
+  }
+  (window._lastResults || []).forEach(r => {
+    checkDeductionsResolved((r.ref || r.co || '').replace(/[^a-zA-Z0-9]/g, '_'));
+  });
+}
+function _copyText(text, el) {
+  navigator.clipboard.writeText(text).catch(() => {
+    const ta = document.createElement('textarea');
+    ta.value = text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove();
+  });
+  const orig = el.textContent; const origColor = el.style.color;
+  el.textContent = 'Copied!'; el.style.color = '#86efac';
+  setTimeout(() => { el.textContent = orig; el.style.color = origColor; }, 1200);
+}
 
 function isBlocked(r) {
   return r.line_items.some(i => i.status === 'missing' || i.status === 'draft');
@@ -1420,8 +1456,8 @@ function addDeductionToJobber(btn, safeDk, claimRef, matchedInvoice, amount, blo
       <div style="background:#0f172a;border-radius:8px;padding:.75rem 1rem;margin-bottom:1rem;font-family:'IBM Plex Mono',monospace;font-size:11px;line-height:1.8">
         <div style="color:var(--text-muted);font-size:9px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:.4rem">Add this line item in Jobber</div>
         <div><span style="color:var(--text-muted)">Title:</span> <span style="color:#fff">Recouped Funds</span></div>
-        <div><span style="color:var(--text-muted)">Description:</span> <span style="color:#fff">WO #${claimRef}</span></div>
-        <div><span style="color:var(--text-muted)">Amount:</span> <span style="color:#f87171">−${fmt(absAmt)}</span></div>
+        <div><span style="color:var(--text-muted)">Description:</span> <span style="color:#fff;cursor:pointer" title="Click to copy" onclick="_copyText('WO #${claimRef}',this)">WO #${claimRef} 📋</span></div>
+        <div><span style="color:var(--text-muted)">Amount:</span> <span style="color:#f87171;cursor:pointer" title="Click to copy" onclick="_copyText('-${absAmt.toFixed(2)}',this)">−${fmt(absAmt)} 📋</span></div>
       </div>
       <div id="deduct-err" style="display:none;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#f87171;margin-bottom:.75rem"></div>
       <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
@@ -1458,6 +1494,7 @@ function addDeductionToJobber(btn, safeDk, claimRef, matchedInvoice, amount, blo
 
     overlay.remove();
     resolvedDeductions.add(safeDk);
+    _saveResolvedDeductions();
     document.getElementById(`dbtn-${safeDk}`)?.remove();
     const okEl = document.getElementById(`dok-${safeDk}`);
     if (okEl) { okEl.style.display = ''; okEl.textContent = `✓ Added to Invoice #${invoiceNumber}`; }
@@ -1538,7 +1575,7 @@ function streamPayment(params, triggerBtn) {
   };
 }
 
-function confirmPaymentDate(paymentDate, count, onConfirm) {
+function confirmPaymentDate(paymentDate, count, onConfirm, skipNote = '') {
   const overlay = document.createElement('div');
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:300;display:flex;align-items:center;justify-content:center;padding:1rem';
   overlay.innerHTML = `
@@ -1547,7 +1584,7 @@ function confirmPaymentDate(paymentDate, count, onConfirm) {
       <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--text-muted);margin-bottom:.5rem">DATE (edit if wrong before confirming)</div>
       <input type="date" id="confirm-date" value="${paymentDate}"
         style="background:var(--surface);border:1px solid var(--teal);border-radius:6px;color:var(--text);font-family:'IBM Plex Mono',monospace;font-size:14px;padding:8px 10px;width:100%;margin-bottom:1.25rem">
-      <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--text-muted);margin-bottom:1rem">Applying to ${count} invoice${count!==1?'s':''}.</div>
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--text-muted);margin-bottom:1rem">Applying to ${count} invoice${count!==1?'s':''}${skipNote}.</div>
       <div style="display:flex;gap:8px;justify-content:flex-end">
         <button onclick="this.closest('[style*=fixed]').remove()"
           style="padding:7px 14px;border-radius:6px;font-family:'IBM Plex Mono',monospace;font-size:10px;cursor:pointer;letter-spacing:0.06em;text-transform:uppercase;border:1px solid rgba(255,255,255,0.2);background:transparent;color:var(--text)">Cancel</button>
@@ -1599,21 +1636,30 @@ async function applyAll(ref, co, btn) {
 
   const invoiceDbIds = [];
   let clientDbId = null;
+  let skippedPaid = 0;
   for (const item of matchedItems) {
     const row = jobberRows.find(r => String(r['Invoice #']).trim() === String(item.jobber_invoice).trim());
     if (!row?.jobberDbId) {
       alert(`Could not find Jobber database ID for invoice #${item.jobber_invoice}.\nMake sure Jobber is connected.`);
       return;
     }
+    if (row['Status'] === 'Paid') { skippedPaid++; continue; }
     invoiceDbIds.push(row.jobberDbId);
     if (!clientDbId) clientDbId = row.clientDbId;
   }
+  if (invoiceDbIds.length === 0) {
+    alert(skippedPaid > 0
+      ? `All ${skippedPaid} invoice${skippedPaid!==1?'s are':' is'} already marked Paid in Jobber — nothing to apply.`
+      : 'No invoices to apply.');
+    return;
+  }
   if (!clientDbId) { alert('Could not determine client ID.'); return; }
 
+  const skipNote = skippedPaid > 0 ? ` — ${skippedPaid} already Paid, skipped` : '';
   confirmPaymentDate(paymentDate, invoiceDbIds.length, date => {
     const params = new URLSearchParams({ clientId: clientDbId, invoiceIds: invoiceDbIds.join(','), type: payType, ref: ref || '', date });
     streamPayment(params, btn);
-  });
+  }, skipNote);
 }
 </script>
 </body>
