@@ -357,8 +357,7 @@ async function fetchJobberInvoices() {
   el('jobber-btn-text').textContent = 'Loading invoices...';
 
   try {
-    const forceRefresh = el('jobber-btn').classList.contains('connected');
-    const resp = await fetch(forceRefresh ? '/api/invoices?refresh=1' : '/api/invoices');
+    const resp = await fetch('/api/invoices');
     const invoices = await resp.json();
 
     if (resp.status === 401) {
@@ -427,7 +426,7 @@ async function fetchJobberInvoices() {
     btn.classList.remove('loading');
     btn.classList.add('connected');
     el('jobber-btn-icon').textContent = '✓';
-    el('jobber-btn-text').textContent = 'Jobber Connected — ' + jobberRows.length + ' invoices (click to refresh)';
+    el('jobber-btn-text').textContent = 'Jobber Connected — ' + jobberRows.length + ' invoices';
     el('s1').classList.add('done');
     checkReady();
 
