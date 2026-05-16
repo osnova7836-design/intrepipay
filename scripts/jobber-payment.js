@@ -284,8 +284,8 @@ async function ensureInvoicesChecked(page, invoiceIds) {
 }
 
 async function clickSubmit(page) {
-  // Exact match — there is also a "Save and Email Receipt" button next to this one.
-  const button = page.getByRole('button', { name: 'Save', exact: true });
+  // Regex anchor ensures we match "Save" but not "Save and Email Receipt".
+  const button = page.locator('button').filter({ hasText: /^\s*Save\s*$/ });
   await button.click();
   // Jobber's SPA keeps background connections open so networkidle never fires; 'load' is sufficient.
   await page.waitForLoadState('load');
