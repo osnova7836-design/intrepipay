@@ -269,10 +269,11 @@ app.post('/api/add-line-item', async (req, res) => {
         const ir = await fetch(GRAPHQL_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}`, 'X-JOBBER-GRAPHQL-VERSION': '2025-04-16' },
-          body: JSON.stringify({ query: `{ __type(name: "InvoiceEditInput") { inputFields { name } } }` })
+          body: JSON.stringify({ query: `{ __schema { mutationType { fields { name } } } }` })
         });
         const id = await ir.json();
-        fields = id.data?.__type?.inputFields?.map(f => f.name) || [];
+        fields = (id.data?.__schema?.mutationType?.fields?.map(f => f.name) || [])
+          .filter(n => /line|item|invoice/i.test(n));
       } catch (_) {}
       return res.status(400).json({ error: mutData.errors.map(e => e.message).join(', '), invoiceEditInputFields: fields });
     }

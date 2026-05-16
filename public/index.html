@@ -1468,7 +1468,7 @@ function addDeductionToJobber(btn, safeDk, claimRef, matchedInvoice, amount, blo
       const data = await resp.json();
       if (!resp.ok || data.error) {
         errEl.textContent = (data.error || 'Failed to add line item') +
-          (data.invoiceEditInputFields?.length ? ' | Valid fields: ' + data.invoiceEditInputFields.join(', ') : '');
+          (data.invoiceEditInputFields?.length ? ' | Line-item mutations available: ' + data.invoiceEditInputFields.join(', ') : '');
         errEl.style.display = '';
         confirmBtn.disabled = false;
         confirmBtn.textContent = 'Add to Jobber';
