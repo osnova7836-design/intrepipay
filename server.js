@@ -150,10 +150,10 @@ app.get('/api/invoices', async (req, res) => {
     let pageCount = 0;
     let stopFetching = false;
     
-    while (hasNextPage && pageCount < 50 && !stopFetching) {
+    while (hasNextPage && pageCount < 20 && !stopFetching) {
       const afterClause = cursor
-        ? `(first: 100, after: "${cursor}", filter: { createdAt: { after: "2025-12-31T23:59:59Z" } })`
-        : `(first: 100, filter: { createdAt: { after: "2025-12-31T23:59:59Z" } })`;
+        ? `(first: 250, after: "${cursor}", filter: { createdAt: { after: "2025-12-31T23:59:59Z" } })`
+        : `(first: 250, filter: { createdAt: { after: "2025-12-31T23:59:59Z" } })`;
       const query = `{
         invoices${afterClause} {
           nodes {
@@ -199,10 +199,9 @@ app.get('/api/invoices', async (req, res) => {
       pageCount++;
 
       const lastInv = page.nodes[page.nodes.length - 1];
-      if (lastInv && parseInt(lastInv.invoiceNumber) < 12000) stopFetching = true;
+      if (lastInv && parseInt(lastInv.invoiceNumber) < 15000) stopFetching = true;
 
-      // Avoid Jobber rate limiting
-      await new Promise(r => setTimeout(r, 1000));
+      if (hasNextPage) await new Promise(r => setTimeout(r, 300));
 
       console.log(`Page ${pageCount}: ${page.nodes.length} invoices, hasNextPage: ${hasNextPage}, total: ${allInvoices.length}`);
     }
