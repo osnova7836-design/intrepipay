@@ -236,14 +236,18 @@ app.post('/api/add-line-item', async (req, res) => {
     const safeName = (name || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
     const safeDesc = (description || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
     const mutation = `mutation {
-      lineItemCreate(input: {
-        linkedToId: "${invoiceId}"
-        name: "${safeName}"
-        ${safeDesc ? `description: "${safeDesc}"` : ''}
-        quantity: 1
-        unitPrice: ${parseFloat(unitPrice)}
+      invoiceUpdate(input: {
+        id: "${invoiceId}"
+        lineItems: [
+          {
+            name: "${safeName}"
+            ${safeDesc ? `description: "${safeDesc}"` : ''}
+            quantity: 1
+            unitPrice: ${parseFloat(unitPrice)}
+          }
+        ]
       }) {
-        lineItem { id }
+        invoice { id }
         userErrors { message path }
       }
     }`;
@@ -261,7 +265,7 @@ app.post('/api/add-line-item', async (req, res) => {
     const mutData = await mutResp.json();
     if (mutData.errors) return res.status(400).json({ error: mutData.errors.map(e => e.message).join(', ') });
 
-    const userErrors = mutData.data?.lineItemCreate?.userErrors;
+    const userErrors = mutData.data?.invoiceUpdate?.userErrors;
     if (userErrors?.length > 0) return res.status(400).json({ error: userErrors.map(e => e.message).join(', ') });
 
     console.log(`Line item added: Invoice ${invoiceId} · "${name}" · $${unitPrice}`);
@@ -508,8 +512,7 @@ app.get('/api/jobber-mutations', async (req, res) => {
     });
     const data = await response.json();
     const all = data.data?.__schema?.mutationType?.fields?.map(f => f.name) || [];
-    const relevant = all.filter(n => /line|invoice|item/i.test(n));
-    res.json({ relevant, total: all.length });
+    res.json({ all, total: all.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
