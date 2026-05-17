@@ -733,12 +733,24 @@ async function loadMultiTab(input) {
         const amtCol    = row0.findIndex(c=>c.includes('payment total')||c.includes('payment amount'));
         const dateCol   = row0.findIndex(c=>c==='date');
         const numCol    = row0.findIndex(c=>c.includes('payment number'));
+        // Also find a 'payment' (per-row) column distinct from 'payment total'/'payment number'/'payment method'
+        const payCol = row0.findIndex(c => c.trim() === 'payment');
         let runningTotal = 0;
+        let debuggedFirst = false;
         rows.slice(headerRowIdx + 1).forEach(row => {
-          const methodCell = String(row[methodCol >= 0 ? methodCol : 5]||'');
-          const sccM = methodCell.match(/\b(SCCV[A-Z0-9]+-\d+)\b/i);
-          if (!sccM) return;
-          const rawAmt = row[amtCol >= 0 ? amtCol : 1];
+          // Find SCC# in any cell — don't assume which column holds it
+          let sccRef = null;
+          for (const cell of row) {
+            const m = String(cell||'').match(/\b(SCCV[A-Z0-9]+-\d+)\b/i);
+            if (m) { sccRef = m[1]; break; }
+          }
+          if (!debuggedFirst) {
+            debuggedFirst = true;
+            console.log('[Cinch first row]', sheetName, row.map((c,i)=>`[${i}:${row0[i]}]=${c}`).join(' '));
+          }
+          if (!sccRef) return;
+          // Use payCol (per-row amount) if present, else amtCol (payment total)
+          const rawAmt = payCol >= 0 ? row[payCol] : (amtCol >= 0 ? row[amtCol] : row[1]);
           if (rawAmt == null) return;
           const amount = parseFloat(String(rawAmt).replace(/[^0-9.]/g,''));
           if (isNaN(amount) || amount === 0) return;
