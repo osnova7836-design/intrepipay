@@ -600,6 +600,8 @@ async function loadMultiTab(input) {
       else if (row0.some(c=>c.includes('cinch'))) co = 'Cinch Home Services';
       else if (row0.some(c=>c.includes('frontdoor'))) co = 'Frontdoor';
       else if (row0.some(c=>c.includes('rheem'))) co = 'Rheem';
+      // Lessen Excel: header row has "Invoice #" and "Wo #" columns (no company name in header)
+      else if (row0.some(c=>c==='wo #'||c==='wo#') && row0.some(c=>c==='invoice #'||c==='invoice#')) co = 'Lessen';
 
       // Extract check number, total, and date from row 0
       // Row 0 format: "View Payment | Rely Home" | null | null | null | date | "Check" | checkNum | total | company | cleared
@@ -617,31 +619,57 @@ async function loadMultiTab(input) {
           // Cell after that is total
           if (row0raw[idx+2]) amt = '$' + Number(row0raw[idx+2]).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
         }
+        // Lessen header format: "Check #: #10090511 via ACH" in one cell
+        const cellStr = String(cell||'');
+        const lessenCheck = cellStr.match(/Check\s*#[:\s]+#?(\w+)/i);
+        if (lessenCheck && !ref) ref = lessenCheck[1];
+        const lessenAmt = cellStr.match(/\$\s*([\d,]+\.\d{2})/);
+        if (lessenAmt && !amt) amt = '$' + lessenAmt[1].replace(/,/g,'');
+        const lessenDate = cellStr.match(/(\d{1,2}\/\d{1,2}\/\d{4})/);
+        if (lessenDate && !payDate) {
+          const mdy = lessenDate[1].match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+          payDate = mdy ? `${mdy[3]}-${mdy[1].padStart(2,'0')}-${mdy[2].padStart(2,'0')}` : lessenDate[1];
+        }
       });
 
       // Fall back to sheet name as ref if not found
       if (!ref) ref = sheetName;
 
-      // Build remittance as tab-separated Claim#	Amount
-      // Find header row (contains "Claim")
-      let headerIdx = -1;
-      rows.forEach((row, i) => {
-        if (row.some(c=>String(c||'').toLowerCase().includes('claim'))) headerIdx = i;
-      });
-
-      const dataRows = headerIdx >= 0 ? rows.slice(headerIdx+1) : rows.slice(2);
+      // Build remittance as tab-separated WO#/Claim#	Amount
       const remitLines = ['Claim #	Amount'];
-      dataRows.forEach(row => {
-        const claim = row[0];
-        const rawAmt = row[1];
-        if (!claim || rawAmt == null) return;
-        // Normalize: handles $-75.00, -$75.00, "$-75.00", plain numbers
-        const amtStr = String(rawAmt).replace(/[$,\s]/g,'').replace(/^-\$/, '-');
-        const amount = parseFloat(amtStr);
-        if (!isNaN(Number(claim)) && !isNaN(amount) && amount !== 0) {
-          remitLines.push(claim + '	' + amount);
-        }
-      });
+
+      if (co === 'Lessen') {
+        // Lessen Excel columns: Invoice # (col 0) | WO # (col 1) | Amount (col 2)
+        const woCol = row0.findIndex(c=>c==='wo #'||c==='wo#');
+        const amtCol = row0.findIndex(c=>c==='amount');
+        rows.slice(1).forEach(row => {
+          const wo = String(row[woCol >= 0 ? woCol : 1]||'').trim();
+          const rawAmt = row[amtCol >= 0 ? amtCol : 2];
+          if (!wo || rawAmt == null) return;
+          const amount = parseFloat(String(rawAmt).replace(/[$,\s]/g,''));
+          if (/^B\d{7,10}$/.test(wo) && !isNaN(amount) && amount !== 0) {
+            remitLines.push(wo + '	' + amount);
+          }
+        });
+      } else {
+        // Generic / Rely format: find header row (contains "Claim"), then col 0 = claim, col 1 = amount
+        let headerIdx = -1;
+        rows.forEach((row, i) => {
+          if (row.some(c=>String(c||'').toLowerCase().includes('claim'))) headerIdx = i;
+        });
+        const dataRows = headerIdx >= 0 ? rows.slice(headerIdx+1) : rows.slice(2);
+        dataRows.forEach(row => {
+          const claim = row[0];
+          const rawAmt = row[1];
+          if (!claim || rawAmt == null) return;
+          // Normalize: handles $-75.00, -$75.00, "$-75.00", plain numbers
+          const amtStr = String(rawAmt).replace(/[$,\s]/g,'').replace(/^-\$/, '-');
+          const amount = parseFloat(amtStr);
+          if (!isNaN(Number(claim)) && !isNaN(amount) && amount !== 0) {
+            remitLines.push(claim + '	' + amount);
+          }
+        });
+      }
 
       if (remitLines.length <= 1) return; // no data rows
 
@@ -744,9 +772,10 @@ function parseRemittance(remit, company) {
     });
   } else if (co.includes('lessen')) {
     // Lessen: work orders start with B, amounts in table
+    // Require decimal point in amount to avoid matching WO# digit strings as amounts
     lines.forEach(line => {
       const wo = line.match(/\b(B\d{7,10})\b/);
-      const amtMatch = line.match(/\$?([\d,]+\.?\d{2})/g);
+      const amtMatch = line.match(/\$?([\d,]+\.\d{2})/g);
       if (wo&&amtMatch) {
         const amt = parseFloat(amtMatch[amtMatch.length-1].replace(/[$,]/g,''));
         if (!isNaN(amt)&&amt>0) items.push({ref:wo[1], amount:amt});
