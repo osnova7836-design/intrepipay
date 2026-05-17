@@ -733,31 +733,18 @@ async function loadMultiTab(input) {
         const amtCol    = row0.findIndex(c=>c.includes('payment total')||c.includes('payment amount'));
         const dateCol   = row0.findIndex(c=>c==='date');
         const numCol    = row0.findIndex(c=>c.includes('payment number'));
-        // Also find a 'payment' (per-row) column distinct from 'payment total'/'payment number'/'payment method'
+        // 'payment' col = per-row individual amount (distinct from 'payment total'/'payment number'/'payment method')
         const payCol = row0.findIndex(c => c.trim() === 'payment');
         let runningTotal = 0;
         let debuggedFirst = false;
         rows.slice(headerRowIdx + 1).forEach(row => {
-          // Find SCC# in any cell — don't assume which column holds it
-          let sccRef = null;
-          for (const cell of row) {
-            const m = String(cell||'').match(/\b(SCCV[A-Z0-9]+-\d+)\b/i);
-            if (m) { sccRef = m[1]; break; }
-          }
-          if (!debuggedFirst) {
-            debuggedFirst = true;
-            console.log('[Cinch first row]', sheetName, row.map((c,i)=>`[${i}:${row0[i]}]=${c}`).join(' '));
-          }
-          if (!sccRef) return;
-          // Use payCol (per-row amount) if present, else amtCol (payment total)
-          const rawAmt = payCol >= 0 ? row[payCol] : (amtCol >= 0 ? row[amtCol] : row[1]);
-          if (rawAmt == null) return;
-          const amount = parseFloat(String(rawAmt).replace(/[^0-9.]/g,''));
-          if (isNaN(amount) || amount === 0) return;
-          remitLines.push(sccRef + '	' + amount.toFixed(2));
-          runningTotal += amount;
-          // Extract ref and date from first data row
+          // Capture ref, date, and chip total from ANY row — the summary row often has
+          // payment number and date without any SCC#, so we must extract these before the SCC# check.
           if (!ref && numCol >= 0 && row[numCol]) ref = String(row[numCol]);
+          if (!amt && amtCol >= 0 && row[amtCol] != null) {
+            const chipAmt = parseFloat(String(row[amtCol]).replace(/[^0-9.]/g,''));
+            if (!isNaN(chipAmt) && chipAmt > 0) amt = '$' + chipAmt.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+          }
           if (!payDate && dateCol >= 0 && row[dateCol] != null) {
             const dc = row[dateCol];
             if (dc instanceof Date && !isNaN(dc.getTime())) {
@@ -769,6 +756,30 @@ async function loadMultiTab(input) {
               payDate = iso ? raw : mdy ? `${mdy[3]}-${mdy[1].padStart(2,'0')}-${mdy[2].padStart(2,'0')}` : raw;
             }
           }
+
+          // Find SCC# in any cell — only rows with an SCC# become remittance line items
+          let sccRef = null, sccCellIdx = -1;
+          for (let ci = 0; ci < row.length; ci++) {
+            const m = String(row[ci]||'').match(/\b(SCCV[A-Z0-9]+-\d+)\b/i);
+            if (m) { sccRef = m[1]; sccCellIdx = ci; break; }
+          }
+          if (!debuggedFirst) {
+            debuggedFirst = true;
+            console.log('[Cinch first row]', sheetName, row.map((c,i)=>`[${i}:${row0[i]}]=${c}`).join(' '));
+          }
+          if (!sccRef) return;
+
+          // Amount priority: labeled 'payment' col → cell adjacent to SCC# → amtCol → col 1
+          let rawAmt;
+          if (payCol >= 0 && row[payCol] != null) rawAmt = row[payCol];
+          else if (sccCellIdx >= 0 && row[sccCellIdx + 1] != null) rawAmt = row[sccCellIdx + 1];
+          else rawAmt = amtCol >= 0 ? row[amtCol] : row[1];
+
+          if (rawAmt == null) return;
+          const amount = parseFloat(String(rawAmt).replace(/[^0-9.]/g,''));
+          if (isNaN(amount) || amount === 0) return;
+          remitLines.push(sccRef + '	' + amount.toFixed(2));
+          runningTotal += amount;
         });
         if (!amt && runningTotal > 0) amt = '$' + runningTotal.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
         if (!ref) ref = sheetName;
