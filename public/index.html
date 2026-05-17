@@ -608,6 +608,11 @@ async function loadMPDF(input) {
                 || mPDF.match(/\bDate:\s*(\d{1,2}\/\d{1,2}\/\d{4})/i);
       if (refM) el('m-ref').value = refM[1];
     }
+    // All County ePay: "Check #: ePay" is not a useful ref — use the invoice number instead
+    if (/^epay$/i.test(el('m-ref').value)) {
+      const invM = mPDF.match(/\binv\s+(\d{4,6})\b/i);
+      if (invM) el('m-ref').value = invM[1];
+    }
   } catch(e) { el('mp-title').textContent='⚠ Could not read — try pasting'; }
 }
 
