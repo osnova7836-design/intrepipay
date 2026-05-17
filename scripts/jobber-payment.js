@@ -87,11 +87,19 @@ async function ensureLoggedIn(ctx) {
 
 async function selectPaymentMethod(page, type) {
   const select = page.locator('select');
-  // Read what Jobber actually offers so we can match flexibly
+
+  // Jobber may populate options asynchronously — wait until there is at least one real option
+  await page.waitForFunction(
+    () => { const s = document.querySelector('select'); return s && s.options.length > 1; },
+    { timeout: 15000 }
+  ).catch(() => {});
+
   const opts = await select.evaluate(el =>
-    Array.from(el.options).map(o => ({ value: o.value, label: o.text.trim() }))
+    Array.from(el.options).map(o => ({ value: o.value, label: o.text.trim() })).filter(o => o.label)
   );
-  console.log(`  Available payment options: ${opts.map(o=>o.label).join(', ')}`);
+  console.log(`  Available payment options: ${opts.map(o => o.label).join(', ')}`);
+
+  if (!opts.length) throw new Error('Payment method select has no options — form may not have loaded');
 
   const tl = type.toLowerCase().replace(/[\s_-]/g, '');
   const aliases = {
@@ -103,17 +111,13 @@ async function selectPaymentMethod(page, type) {
   };
   const candidates = aliases[tl] || [tl];
 
-  // Exact label match first, then partial
-  let match = opts.find(o => o.label.toLowerCase() === type.toLowerCase())
-           || opts.find(o => candidates.some(a => o.label.toLowerCase().includes(a)));
+  const match = opts.find(o => o.label.toLowerCase() === type.toLowerCase())
+             || opts.find(o => candidates.some(a => o.label.toLowerCase().includes(a)));
 
-  if (match) {
-    await select.selectOption({ value: match.value });
-    console.log(`  Payment method: selected "${match.label}"`);
-  } else {
-    // Last resort — let Playwright throw a descriptive error
-    await select.selectOption({ label: type });
-  }
+  if (!match) throw new Error(`No option matches "${type}". Available: ${opts.map(o => o.label).join(', ')}`);
+
+  await select.selectOption({ value: match.value });
+  console.log(`  Payment method: selected "${match.label}"`);
 }
 
 async function fillReference(page, type, ref) {
