@@ -754,7 +754,7 @@ async function loadMultiTab(input) {
           if (rawAmt == null) return;
           const amount = parseFloat(String(rawAmt).replace(/[^0-9.]/g,''));
           if (isNaN(amount) || amount === 0) return;
-          remitLines.push(sccM[1] + '	' + amount.toFixed(2));
+          remitLines.push(sccRef + '	' + amount.toFixed(2));
           runningTotal += amount;
           // Extract ref and date from first data row
           if (!ref && numCol >= 0 && row[numCol]) ref = String(row[numCol]);
