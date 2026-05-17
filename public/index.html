@@ -590,9 +590,20 @@ async function loadMultiTab(input) {
       const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:null, raw:true});
       if (!rows||rows.length<2) return;
 
-      // Detect company from first row content
-      const row0 = rows[0].map(c=>String(c||'').toLowerCase());
-      const row0raw = rows[0];
+      // Find the actual header row — some Excel files have a blank or title row above the column headers.
+      // Scan rows 0-4 for the first row containing known column header keywords.
+      let headerRowIdx = 0;
+      for (let ri = 1; ri < Math.min(5, rows.length); ri++) {
+        const rc = rows[ri].map(c=>String(c||'').toLowerCase());
+        if (rc.some(c=>c.includes('work order')||c==='wo #'||c==='wo#'||c.includes('invoice #')||c.includes('claim')||c==='check')) {
+          headerRowIdx = ri;
+          break;
+        }
+      }
+      const row0raw = rows[headerRowIdx];
+      const row0 = row0raw.map(c=>String(c||'').toLowerCase());
+
+      // Detect company from header row content
       let co = 'Rely Home Warranty'; // default for Rely Excel format
       if (row0.some(c=>c.includes('rely'))) co = 'Rely Home Warranty';
       else if (row0.some(c=>c.includes('first american')||c.includes('falcon'))) co = 'First American / FALCON';
@@ -605,39 +616,53 @@ async function loadMultiTab(input) {
       // Cinch Excel: header has "Work order" + "Payment method" (SCC#) + "Payment amount"
       else if (row0.some(c=>c.includes('work order')) && row0.some(c=>c.includes('payment method')) && row0.some(c=>c.includes('payment amount'))) co = 'Cinch Home Services';
 
-      // Extract check number, total, and date from row 0
-      // Row 0 format: "View Payment | Rely Home" | null | null | null | date | "Check" | checkNum | total | company | cleared
+      console.log('[loadMultiTab]', sheetName, '→ co:', co, '| headerRow:', headerRowIdx, '| cols:', row0.filter(c=>c).join(' | '));
+
+      // Extract check number, total, and date.
+      // Scan the entire sheet so the check/payment summary is found regardless of which row it's on.
+      // To avoid picking up individual claim amounts, only extract from a row that contains "Check" info.
       let ref = '', amt = '', payDate = '';
-      row0raw.forEach((cell, idx) => {
-        if (String(cell||'').toLowerCase() === 'check') {
-          // Cell before "Check" is the payment date; normalize to yyyy-mm-dd for date input
-          if (row0raw[idx-1]) {
-            const raw = String(row0raw[idx-1]);
-            const mdy = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-            payDate = mdy ? `${mdy[3]}-${mdy[1].padStart(2,'0')}-${mdy[2].padStart(2,'0')}` : raw;
+      rows.forEach(row => {
+        if (!row) return;
+        const isCheckRow = row.some(cell => {
+          const s = String(cell||'');
+          return s.toLowerCase() === 'check' || /Check\s*#/i.test(s);
+        });
+        // For Rely format the header row has the standalone "Check" keyword; for all others
+        // only process rows that explicitly contain check/payment summary text.
+        if (!isCheckRow && row !== row0raw) return;
+        row.forEach((cell, idx) => {
+          if (cell == null) return;
+          // Rely: standalone "Check" keyword — adjacent cells hold date / ref / total
+          if (String(cell||'').toLowerCase() === 'check' && row === row0raw) {
+            if (row[idx-1]) {
+              const raw = String(row[idx-1]);
+              const mdy = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+              if (mdy) payDate = `${mdy[3]}-${mdy[1].padStart(2,'0')}-${mdy[2].padStart(2,'0')}`;
+            }
+            if (row[idx+1]) ref = String(row[idx+1]);
+            if (row[idx+2]) amt = '$' + Number(row[idx+2]).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
           }
-          // Next cell is check number
-          if (row0raw[idx+1]) ref = String(row0raw[idx+1]);
-          // Cell after that is total
-          if (row0raw[idx+2]) amt = '$' + Number(row0raw[idx+2]).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
-        }
-        // Lessen header format: "Check #: #10090511 via ACH" in one cell
-        const cellStr = String(cell||'');
-        const lessenCheck = cellStr.match(/Check\s*#[:\s]+#?(\w+)/i);
-        if (lessenCheck && !ref) ref = lessenCheck[1];
-        const lessenAmt = cellStr.match(/\$\s*([\d,]+\.\d{2})/);
-        if (lessenAmt && !amt) amt = '$' + lessenAmt[1].replace(/,/g,'');
-        // Excel stores currency cells as plain numbers — handle when $ regex didn't match
-        if (typeof cell === 'number' && !isNaN(cell) && cell > 0 && !amt) amt = '$' + cell.toFixed(2);
-        const lessenDate = cellStr.match(/(\d{1,2}\/\d{1,2}\/\d{4})/);
-        if (lessenDate && !payDate) {
-          const mdy = lessenDate[1].match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-          payDate = mdy ? `${mdy[3]}-${mdy[1].padStart(2,'0')}-${mdy[2].padStart(2,'0')}` : lessenDate[1];
-        }
-        // Excel stores date cells as Date objects (cellDates:true) — handle when string regex didn't match
-        if (cell instanceof Date && !isNaN(cell.getTime()) && !payDate) {
-          payDate = `${cell.getFullYear()}-${String(cell.getMonth()+1).padStart(2,'0')}-${String(cell.getDate()).padStart(2,'0')}`;
-        }
+          const cellStr = String(cell);
+          // Lessen: "Check #: #10090511 via ACH" combined in one cell
+          const lessenCheck = cellStr.match(/Check\s*#[:\s]+#?(\w+)/i);
+          if (lessenCheck && !ref) ref = lessenCheck[1];
+          // Dollar amount as text: "$3,947.49"
+          const lessenAmt = cellStr.match(/\$\s*([\d,]+\.\d{2})/);
+          if (lessenAmt && !amt) amt = '$' + lessenAmt[1].replace(/,/g,'');
+          // Excel number cell (raw:true returns number, no $ sign)
+          if (typeof cell === 'number' && cell > 0 && !amt) amt = '$' + cell.toFixed(2);
+          // Date as text: "4/17/2026"
+          const lessenDate = cellStr.match(/(\d{1,2}\/\d{1,2}\/\d{4})/);
+          if (lessenDate && !payDate) {
+            const mdy = lessenDate[1].match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+            payDate = mdy ? `${mdy[3]}-${mdy[1].padStart(2,'0')}-${mdy[2].padStart(2,'0')}` : lessenDate[1];
+          }
+          // Date as Date object (XLSX cellDates:true)
+          if (cell instanceof Date && !isNaN(cell.getTime()) && !payDate) {
+            payDate = `${cell.getFullYear()}-${String(cell.getMonth()+1).padStart(2,'0')}-${String(cell.getDate()).padStart(2,'0')}`;
+          }
+        });
       });
 
       // Fall back to sheet name as ref if not found
@@ -650,7 +675,7 @@ async function loadMultiTab(input) {
         // Lessen Excel columns: Invoice # (col 0) | WO # (col 1) | Amount (col 2)
         const woCol = row0.findIndex(c=>c==='wo #'||c==='wo#');
         const amtCol = row0.findIndex(c=>c==='amount');
-        rows.slice(1).forEach(row => {
+        rows.slice(headerRowIdx + 1).forEach(row => {
           const wo = String(row[woCol >= 0 ? woCol : 1]||'').trim();
           const rawAmt = row[amtCol >= 0 ? amtCol : 2];
           if (!wo || rawAmt == null) return;
@@ -659,6 +684,12 @@ async function loadMultiTab(input) {
             remitLines.push(wo + '	' + amount.toFixed(2));
           }
         });
+        // Fallback: if the check row didn't yield a total, sum the line items
+        if (!amt && remitLines.length > 1) {
+          const total = remitLines.slice(1).reduce((s,l) => s + (parseFloat(l.split('\t')[1])||0), 0);
+          if (total > 0) amt = '$' + total.toFixed(2);
+        }
+        console.log('[Lessen]', sheetName, '→ ref:', ref, '| amt:', amt, '| payDate:', payDate, '| lines:', remitLines.length-1);
       } else if (co === 'Cinch Home Services') {
         // Cinch Excel columns: WO# | Payment | Payment number | Payment method (SCC#) | Payment amount | Date
         // Cinch columns: Work order | Payment amount | [blank] | [blank] | Payment number | Payment method (SCC#) | Payment amount* | Date
@@ -670,7 +701,7 @@ async function loadMultiTab(input) {
         const dateCol   = row0.findIndex(c=>c==='date');
         const numCol    = row0.findIndex(c=>c.includes('payment number'));
         let runningTotal = 0;
-        rows.slice(1).forEach(row => {
+        rows.slice(headerRowIdx + 1).forEach(row => {
           const methodCell = String(row[methodCol >= 0 ? methodCol : 5]||'');
           const sccM = methodCell.match(/\b(SCCV[A-Z0-9]+-\d+)\b/i);
           if (!sccM) return;
