@@ -553,6 +553,21 @@ async function loadMPDF(input) {
     mPDF=text.replace(/\s{3,}/g,' ').trim();
     el('mp-title').textContent='✓ '+file.name;
     const prev=el('mp-preview'); prev.style.display=''; prev.textContent=mPDF.substring(0,400)+(mPDF.length>400?'...':'');
+    // Auto-fill amount and ref/date from PDF if fields are still empty
+    if (!el('m-amt').value) {
+      const amtM = mPDF.match(/\bAmount:\s*([\d,]+\.\d{2})/i)
+                || mPDF.match(/\bTotal(?:\s+Amount)?:\s*\$?([\d,]+\.\d{2})/i)
+                || mPDF.match(/\bNet(?:\s+Pay(?:ment)?)?\s*[:\-]\s*\$?([\d,]+\.\d{2})/i)
+                || mPDF.match(/\bPayment\s+Amount:\s*\$?([\d,]+\.\d{2})/i);
+      if (amtM) el('m-amt').value = '$' + amtM[1];
+    }
+    if (!el('m-ref').value) {
+      const refM = mPDF.match(/\bCheck\s*#\s*[:\-]?\s*([A-Z0-9\-]{3,20})/i)
+                || mPDF.match(/\bPayment\s*#\s*[:\-]?\s*([A-Z0-9\-]{3,20})/i)
+                || mPDF.match(/\bRef(?:erence)?\s*#?\s*[:\-]\s*([A-Z0-9\-]{3,20})/i)
+                || mPDF.match(/\bDate:\s*(\d{1,2}\/\d{1,2}\/\d{4})/i);
+      if (refM) el('m-ref').value = refM[1];
+    }
   } catch(e) { el('mp-title').textContent='⚠ Could not read — try pasting'; }
 }
 
@@ -767,6 +782,29 @@ function parseRemittance(remit, company) {
         }
       }
     });
+  } else if (co.includes('all county')) {
+    // All County check PDF: Memo column contains "inv NNNNN" where NNNNN = Jobber invoice #.
+    // Bills Applied To and Ledger Breakdown both contain the same entries — dedupe by invoice #.
+    const seen = new Set();
+    const re = /\binv\s+(\d{4,6})\b/g;
+    let m;
+    while ((m = re.exec(remit)) !== null) {
+      const invNum = m[1];
+      if (seen.has(invNum)) continue;
+      seen.add(invNum);
+      // Slice from after "inv NNNNN" to the next "inv" occurrence (or end of text)
+      const startIdx = m.index + m[0].length;
+      const nextInvRe = /\binv\s+\d/g;
+      nextInvRe.lastIndex = startIdx;
+      const nextM = nextInvRe.exec(remit);
+      const slice = nextM ? remit.slice(startIdx, nextM.index) : remit.slice(startIdx);
+      // Amounts: BillAmount then PaidAmount — take last (PaidAmount handles partial pays)
+      const amts = slice.match(/\d{1,3}(?:,\d{3})*\.\d{2}/g);
+      if (amts && amts.length > 0) {
+        const paid = parseFloat(amts[amts.length - 1].replace(/,/g, ''));
+        if (!isNaN(paid) && paid > 0) items.push({ref: invNum, amount: paid});
+      }
+    }
   } else {
     // Generic: extract any reference numbers and amounts
     lines.forEach(line => {
@@ -798,6 +836,11 @@ function lookupJobber(ref, company) {
     return rows.reduce((best, row) =>
       parseInt(row['Invoice #']||0) > parseInt(best['Invoice #']||0) ? row : best
     );
+  }
+
+  // All County: PDF invoice # matches Jobber invoice # directly
+  if (coLower.includes('all county')) {
+    return bestMatch(jobberMap['inv:'+ref]);
   }
 
   // Direct subject match
@@ -1014,6 +1057,7 @@ COMPANY RULES:
 - Cinch: SCC# in Comments column (not CCCV number)
 - Frontdoor: Dispatch ID matches Subject
 - Rheem: Document Reference Number (WCN) matches Subject
+- All County: PDF Memo column has "inv NNNNN" — NNNNN is the Jobber Invoice # directly. Match to Invoice #, not Subject.
 RESPOND ONLY VALID JSON:
 {"payments":[{"co":"","ref":"","line_items":[{"ref":"","remittance_amount":0,"jobber_invoice":"","jobber_subject":"","jobber_status":"","jobber_amount":0,"difference":0,"status":"pastdue|draft|missing|mismatch|deduction","note":""}],"total_paid":0,"total_invoiced":0}]}`;
 
