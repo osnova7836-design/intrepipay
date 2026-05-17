@@ -698,9 +698,6 @@ async function loadMultiTab(input) {
         });
       });
 
-      // Fall back to sheet name as ref if not found
-      if (!ref) ref = sheetName;
-
       // Build remittance as tab-separated WO#/Claim#	Amount
       const remitLines = ['Claim #	Amount'];
 
@@ -803,6 +800,7 @@ async function loadMultiTab(input) {
         });
       }
 
+      if (!ref) ref = sheetName; // last-resort fallback for any company
       if (remitLines.length <= 1) return; // no data rows
 
       newPayments.push({
