@@ -602,6 +602,8 @@ async function loadMultiTab(input) {
       else if (row0.some(c=>c.includes('rheem'))) co = 'Rheem';
       // Lessen Excel: header row has "Invoice #" and "Wo #" columns (no company name in header)
       else if (row0.some(c=>c==='wo #'||c==='wo#') && row0.some(c=>c==='invoice #'||c==='invoice#')) co = 'Lessen';
+      // Cinch Excel: header has "WO#" + "Payment method" (contains SCC#) + "Payment amount"
+      else if (row0.some(c=>c==='wo#'||c==='wo #') && row0.some(c=>c.includes('payment method')) && row0.some(c=>c.includes('payment amount'))) co = 'Cinch Home Services';
 
       // Extract check number, total, and date from row 0
       // Row 0 format: "View Payment | Rely Home" | null | null | null | date | "Check" | checkNum | total | company | cleared
@@ -651,6 +653,36 @@ async function loadMultiTab(input) {
             remitLines.push(wo + '	' + amount);
           }
         });
+      } else if (co === 'Cinch Home Services') {
+        // Cinch Excel columns: WO# | Payment | Payment number | Payment method (SCC#) | Payment amount | Date
+        // SCC# (SCCV...) is in "Payment method" column; match it against Jobber subject.
+        // CCC# in the same cell is a payment ref we don't need for matching.
+        const methodCol = row0.findIndex(c=>c.includes('payment method'));
+        const amtCol    = row0.findIndex(c=>c.includes('payment amount'));
+        const dateCol   = row0.findIndex(c=>c==='date');
+        const numCol    = row0.findIndex(c=>c.includes('payment number'));
+        let runningTotal = 0;
+        rows.slice(1).forEach(row => {
+          const methodCell = String(row[methodCol >= 0 ? methodCol : 3]||'');
+          const sccM = methodCell.match(/\b(SCCV[A-Z0-9]+-\d+)\b/i);
+          if (!sccM) return;
+          const rawAmt = row[amtCol >= 0 ? amtCol : 4];
+          if (rawAmt == null) return;
+          const amount = parseFloat(String(rawAmt).replace(/[^0-9.]/g,''));
+          if (isNaN(amount) || amount === 0) return;
+          remitLines.push(sccM[1] + '	' + amount);
+          runningTotal += amount;
+          // Extract ref and date from first data row
+          if (!ref && numCol >= 0 && row[numCol]) ref = String(row[numCol]);
+          if (!payDate && dateCol >= 0 && row[dateCol]) {
+            const raw = String(row[dateCol]);
+            const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+            const mdy = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+            payDate = iso ? raw : mdy ? `${mdy[3]}-${mdy[1].padStart(2,'0')}-${mdy[2].padStart(2,'0')}` : raw;
+          }
+        });
+        if (!amt && runningTotal > 0) amt = '$' + runningTotal.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+        if (!ref) ref = sheetName;
       } else {
         // Generic / Rely format: find header row (contains "Claim"), then col 0 = claim, col 1 = amount
         let headerIdx = -1;
@@ -771,12 +803,15 @@ function parseRemittance(remit, company) {
       }
     });
   } else if (co.includes('lessen')) {
-    // Lessen: work orders start with B, amounts in table
-    // Require decimal point in amount to avoid matching WO# digit strings as amounts
+    // Lessen: work orders start with B; amount is in the column after the WO#.
+    // Search only the text AFTER the WO# to prevent the WO# digits from bleeding
+    // into the amount when uploaded as CSV (e.g. "B15364620,269.99" → 15364620269.99).
     lines.forEach(line => {
       const wo = line.match(/\b(B\d{7,10})\b/);
-      const amtMatch = line.match(/\$?([\d,]+\.\d{2})/g);
-      if (wo&&amtMatch) {
+      if (!wo) return;
+      const afterWO = line.slice(line.indexOf(wo[1]) + wo[1].length);
+      const amtMatch = afterWO.match(/\$?([\d,]+\.\d{2})/g);
+      if (amtMatch) {
         const amt = parseFloat(amtMatch[amtMatch.length-1].replace(/[$,]/g,''));
         if (!isNaN(amt)&&amt>0) items.push({ref:wo[1], amount:amt});
       }
