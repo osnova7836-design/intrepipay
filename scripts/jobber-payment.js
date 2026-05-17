@@ -86,24 +86,52 @@ async function ensureLoggedIn(ctx) {
 }
 
 async function selectPaymentMethod(page, type) {
-  const select = page.locator('select');
+  // Jobber shows two sections: "Collect payment with Jobber Payments" (charges the client)
+  // and "Create a Payment Record" (records an already-received payment). Always use the latter.
+  const createRecord = page.getByText('Create a Payment Record', { exact: false });
+  if (await createRecord.count() > 0) {
+    await createRecord.first().click();
+    await page.waitForTimeout(400);
+    console.log('  Switched to "Create a Payment Record" mode');
+  }
 
-  // Jobber may populate options asynchronously — wait until there is at least one real option
+  // Wait for any select to have options
   await page.waitForFunction(
-    () => { const s = document.querySelector('select'); return s && s.options.length > 1; },
+    () => Array.from(document.querySelectorAll('select')).some(s => s.options.length > 1),
     { timeout: 15000 }
   ).catch(() => {});
 
-  const opts = await select.evaluate(el =>
-    Array.from(el.options).map(o => ({ value: o.value, label: o.text.trim() })).filter(o => o.label)
-  );
-  console.log(`  Available payment options: ${opts.map(o => o.label).join(', ')}`);
+  // Find the select that belongs to "Create a Payment Record":
+  // it will have record-type options (Check, Cash, Other) that the Jobber Payments select won't.
+  const allSelects = page.locator('select');
+  const selectCount = await allSelects.count();
+  let targetSelect = allSelects.last(); // fallback
+  let opts = [];
 
+  for (let i = 0; i < selectCount; i++) {
+    const s = allSelects.nth(i);
+    const sopts = await s.evaluate(el =>
+      Array.from(el.options).map(o => ({ value: o.value, label: o.text.trim() })).filter(o => o.label)
+    );
+    if (sopts.some(o => /check|cash|other/i.test(o.label))) {
+      targetSelect = s;
+      opts = sopts;
+      break;
+    }
+  }
+
+  if (!opts.length) {
+    opts = await targetSelect.evaluate(el =>
+      Array.from(el.options).map(o => ({ value: o.value, label: o.text.trim() })).filter(o => o.label)
+    );
+  }
+
+  console.log(`  Available payment options: ${opts.map(o => o.label).join(', ')}`);
   if (!opts.length) throw new Error('Payment method select has no options — form may not have loaded');
 
   const tl = type.toLowerCase().replace(/[\s_-]/g, '');
   const aliases = {
-    ach:        ['ach', 'bank transfer', 'bank', 'eft', 'electronic'],
+    ach:        ['ach', 'bank transfer', 'bank payment', 'bank', 'eft', 'electronic'],
     check:      ['check', 'cheque'],
     cash:       ['cash'],
     creditcard: ['credit card', 'credit', 'card'],
@@ -116,7 +144,7 @@ async function selectPaymentMethod(page, type) {
 
   if (matchIdx < 0) throw new Error(`No option matches "${type}". Available: ${opts.map(o => o.label).join(', ')}`);
 
-  await select.selectOption({ index: matchIdx });
+  await targetSelect.selectOption({ index: matchIdx });
   console.log(`  Payment method: selected "${opts[matchIdx].label}"`);
 }
 
