@@ -538,8 +538,40 @@ function setSrc(src, btn) {
 function loadMCSV(input) {
   const file=input.files[0]; if(!file) return;
   el('mc-zone').classList.add('has-file'); el('mc-title').textContent='✓ '+file.name;
-  if (file.name.endsWith('.csv')) { Papa.parse(file,{header:true,skipEmptyLines:true,complete:r=>{mCSV=r.data.map(row=>Object.values(row).join('\t')).join('\n');}});}
-  else {const rd=new FileReader();rd.onload=e=>{const wb=XLSX.read(e.target.result,{type:'array'});mCSV=XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]]);};rd.readAsArrayBuffer(file);}
+  if (file.name.endsWith('.csv')) {
+    Papa.parse(file,{header:true,skipEmptyLines:true,complete:r=>{
+      mCSV=r.data.map(row=>Object.values(row).join('\t')).join('\n');
+      // For CSV: check info is in the header keys (first row treated as headers by Papa)
+      if (r.data.length>0) _mCSVAutoFill(Object.keys(r.data[0]).join(','));
+    }});
+  } else {
+    const rd=new FileReader();
+    rd.onload=e=>{
+      const wb=XLSX.read(e.target.result,{type:'array'});
+      mCSV=XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]]);
+      // Excel: row 0 is the first CSV line — scan it for Lessen check summary
+      _mCSVAutoFill(mCSV.split('\n')[0]||'');
+    };
+    rd.readAsArrayBuffer(file);
+  }
+}
+function _mCSVAutoFill(line) {
+  if (!line) return;
+  if (!/Check\s*#/i.test(line)) return; // only applies to Lessen check-row format
+  if (!el('m-ref').value) {
+    const refM = line.match(/Check\s*#[:\s]+#?(\w+)/i);
+    if (refM) el('m-ref').value = refM[1];
+  }
+  if (!el('m-amt').value) {
+    // Try "$3,947.49" first, then bare number "3947.49"
+    const dollarM = line.match(/\$\s*([\d,]+\.\d{2})/);
+    if (dollarM) {
+      el('m-amt').value = '$' + dollarM[1].replace(/,/g,'');
+    } else {
+      const nums = line.match(/\b\d[\d,]*\.\d{2}\b/g);
+      if (nums) el('m-amt').value = '$' + nums[nums.length-1];
+    }
+  }
 }
 async function loadMPDF(input) {
   const file=input.files[0]; if(!file) return;
