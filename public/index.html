@@ -1445,12 +1445,16 @@ function exportBilling() {
   const wb = XLSX.utils.book_new();
   const today = new Date().toLocaleDateString('en-US',{month:'numeric',day:'numeric',year:'numeric'});
 
+  // Derive company name(s) from the results so action strings match the actual company
+  const companies = [...new Set(results.map(r => r.co).filter(Boolean))];
+  const co = companies.length === 1 ? companies[0] : 'the company';
+
   // Collect all issues across all checks, grouped by type
   const groups = {
-    missing:  { label: 'MISSING INVOICES',  action: 'No matching invoice found in Jobber — create a Rely Home invoice for this claim', items: [] },
+    missing:  { label: 'MISSING INVOICES',  action: `No matching invoice found in Jobber — create an invoice for this claim`, items: [] },
     draft:    { label: 'DRAFT INVOICES',     action: 'Invoice is in Draft — fix and send in Jobber before payment can be applied', items: [] },
-    shortpay: { label: 'SHORT PAYS',         action: 'Rely paid less than invoiced — adjust the invoice OR contact Rely for additional payment', items: [] },
-    overpay:  { label: 'OVER PAYS',          action: 'Rely paid more than invoiced — adjust the invoice down to match the payment', items: [] },
+    shortpay: { label: 'SHORT PAYS',         action: `${co} paid less than invoiced — adjust the invoice OR contact ${co} for additional payment`, items: [] },
+    overpay:  { label: 'OVER PAYS',          action: `${co} paid more than invoiced — adjust the invoice down to match the payment`, items: [] },
   };
 
   results.forEach(r => {
