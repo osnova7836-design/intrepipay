@@ -585,6 +585,14 @@ async function loadMPDF(input) {
     mPDF=text.replace(/\s{3,}/g,' ').trim();
     el('mp-title').textContent='✓ '+file.name;
     const prev=el('mp-preview'); prev.style.display=''; prev.textContent=mPDF.substring(0,400)+(mPDF.length>400?'...':'');
+    // Auto-detect company from PDF content if not already chosen
+    if (!el('m-co').value) {
+      if (/\binv\s+\d{4,6}\b/i.test(mPDF))           el('m-co').value = 'All County First Choice';
+      else if (/Dispatch\s*(?:ID|#)/i.test(mPDF))      el('m-co').value = 'Frontdoor';
+      else if (/\bSCCV[A-Z0-9]+-\d+\b/i.test(mPDF))   el('m-co').value = 'Cinch Home Services';
+      else if (/\bFALCON\b/i.test(mPDF))               el('m-co').value = 'First American / FALCON';
+      else if (/\bClaim\s*#/i.test(mPDF))              el('m-co').value = 'Rely Home Warranty';
+    }
     // Auto-fill amount and ref/date from PDF if fields are still empty
     if (!el('m-amt').value) {
       const amtM = mPDF.match(/\bAmount:\s*([\d,]+\.\d{2})/i)
