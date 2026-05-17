@@ -645,8 +645,9 @@ async function loadMultiTab(input) {
       else if (row0.some(c=>c.includes('rheem'))) co = 'Rheem';
       // Lessen Excel: header row has "Invoice #" and "Wo #" columns (no company name in header)
       else if (row0.some(c=>c==='wo #'||c==='wo#') && row0.some(c=>c==='invoice #'||c==='invoice#')) co = 'Lessen';
-      // Cinch Excel: header has "Work order" + "Payment method" (SCC#) + "Payment amount"
-      else if (row0.some(c=>c.includes('work order')) && row0.some(c=>c.includes('payment method')) && row0.some(c=>c.includes('payment amount'))) co = 'Cinch Home Services';
+      // Cinch Excel: header has "Payment method" (holds SCC#) + "Payment total"
+      // Tabs may also have "wo#" column; "payment amount" was renamed "payment total" by user
+      else if (row0.some(c=>c.includes('payment method')) && row0.some(c=>c.includes('payment total'))) co = 'Cinch Home Services';
 
       console.log('[loadMultiTab]', sheetName, '→ co:', co, '| headerRow:', headerRowIdx, '| cols:', row0.filter(c=>c).join(' | '));
 
@@ -727,9 +728,9 @@ async function loadMultiTab(input) {
         // Cinch columns: Work order | Payment amount | [blank] | [blank] | Payment number | Payment method (SCC#) | Payment amount* | Date
         // *Rename the second "Payment amount" to "Payment total" in the Excel so "Payment amount" is unique.
         // SCC# (SCCV...) is in "Payment method"; CCC# in same cell is ignored.
-        const woCol     = row0.findIndex(c=>c.includes('work order'));
+        const woCol     = row0.findIndex(c=>c.includes('work order')||c==='wo#'||c==='wo #');
         const methodCol = row0.findIndex(c=>c.includes('payment method'));
-        const amtCol    = row0.findIndex(c=>c.includes('payment amount'));
+        const amtCol    = row0.findIndex(c=>c.includes('payment total')||c.includes('payment amount'));
         const dateCol   = row0.findIndex(c=>c==='date');
         const numCol    = row0.findIndex(c=>c.includes('payment number'));
         let runningTotal = 0;

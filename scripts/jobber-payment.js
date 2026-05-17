@@ -86,8 +86,34 @@ async function ensureLoggedIn(ctx) {
 }
 
 async function selectPaymentMethod(page, type) {
-  // There is exactly one <select> on this page — the payment method dropdown.
-  await page.locator('select').selectOption({ label: type });
+  const select = page.locator('select');
+  // Read what Jobber actually offers so we can match flexibly
+  const opts = await select.evaluate(el =>
+    Array.from(el.options).map(o => ({ value: o.value, label: o.text.trim() }))
+  );
+  console.log(`  Available payment options: ${opts.map(o=>o.label).join(', ')}`);
+
+  const tl = type.toLowerCase().replace(/[\s_-]/g, '');
+  const aliases = {
+    ach:        ['ach', 'bank transfer', 'bank', 'eft', 'electronic'],
+    check:      ['check', 'cheque'],
+    cash:       ['cash'],
+    creditcard: ['credit card', 'credit', 'card'],
+    other:      ['other'],
+  };
+  const candidates = aliases[tl] || [tl];
+
+  // Exact label match first, then partial
+  let match = opts.find(o => o.label.toLowerCase() === type.toLowerCase())
+           || opts.find(o => candidates.some(a => o.label.toLowerCase().includes(a)));
+
+  if (match) {
+    await select.selectOption({ value: match.value });
+    console.log(`  Payment method: selected "${match.label}"`);
+  } else {
+    // Last resort — let Playwright throw a descriptive error
+    await select.selectOption({ label: type });
+  }
 }
 
 async function fillReference(page, type, ref) {
