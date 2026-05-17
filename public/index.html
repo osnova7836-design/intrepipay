@@ -627,10 +627,16 @@ async function loadMultiTab(input) {
         if (lessenCheck && !ref) ref = lessenCheck[1];
         const lessenAmt = cellStr.match(/\$\s*([\d,]+\.\d{2})/);
         if (lessenAmt && !amt) amt = '$' + lessenAmt[1].replace(/,/g,'');
+        // Excel stores currency cells as plain numbers — handle when $ regex didn't match
+        if (typeof cell === 'number' && !isNaN(cell) && cell > 0 && !amt) amt = '$' + cell.toFixed(2);
         const lessenDate = cellStr.match(/(\d{1,2}\/\d{1,2}\/\d{4})/);
         if (lessenDate && !payDate) {
           const mdy = lessenDate[1].match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
           payDate = mdy ? `${mdy[3]}-${mdy[1].padStart(2,'0')}-${mdy[2].padStart(2,'0')}` : lessenDate[1];
+        }
+        // Excel stores date cells as Date objects (cellDates:true) — handle when string regex didn't match
+        if (cell instanceof Date && !isNaN(cell.getTime()) && !payDate) {
+          payDate = `${cell.getFullYear()}-${String(cell.getMonth()+1).padStart(2,'0')}-${String(cell.getDate()).padStart(2,'0')}`;
         }
       });
 
@@ -650,7 +656,7 @@ async function loadMultiTab(input) {
           if (!wo || rawAmt == null) return;
           const amount = parseFloat(String(rawAmt).replace(/[$,\s]/g,''));
           if (/^B\d{7,10}$/.test(wo) && !isNaN(amount) && amount !== 0) {
-            remitLines.push(wo + '	' + amount);
+            remitLines.push(wo + '	' + amount.toFixed(2));
           }
         });
       } else if (co === 'Cinch Home Services') {
@@ -672,15 +678,20 @@ async function loadMultiTab(input) {
           if (rawAmt == null) return;
           const amount = parseFloat(String(rawAmt).replace(/[^0-9.]/g,''));
           if (isNaN(amount) || amount === 0) return;
-          remitLines.push(sccM[1] + '	' + amount);
+          remitLines.push(sccM[1] + '	' + amount.toFixed(2));
           runningTotal += amount;
           // Extract ref and date from first data row
           if (!ref && numCol >= 0 && row[numCol]) ref = String(row[numCol]);
-          if (!payDate && dateCol >= 0 && row[dateCol]) {
-            const raw = String(row[dateCol]);
-            const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-            const mdy = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-            payDate = iso ? raw : mdy ? `${mdy[3]}-${mdy[1].padStart(2,'0')}-${mdy[2].padStart(2,'0')}` : raw;
+          if (!payDate && dateCol >= 0 && row[dateCol] != null) {
+            const dc = row[dateCol];
+            if (dc instanceof Date && !isNaN(dc.getTime())) {
+              payDate = `${dc.getFullYear()}-${String(dc.getMonth()+1).padStart(2,'0')}-${String(dc.getDate()).padStart(2,'0')}`;
+            } else {
+              const raw = String(dc);
+              const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+              const mdy = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+              payDate = iso ? raw : mdy ? `${mdy[3]}-${mdy[1].padStart(2,'0')}-${mdy[2].padStart(2,'0')}` : raw;
+            }
           }
         });
         if (!amt && runningTotal > 0) amt = '$' + runningTotal.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
