@@ -408,12 +408,18 @@ async function applyJobberPayment({
     try {
       for (let i = 0; i < batches.length; i++) {
         const batch = batches[i];
+        const isLast = i === batches.length - 1;
         if (batches.length > 1) console.log(`\n=== Batch ${i + 1} of ${batches.length} (${batch.length} invoices) ===`);
         const page = await ctx.newPage();
+        let leaveOpen = false;
         try {
           await applyJobberPaymentBatch(page, { clientId, invoiceIds: batch, type, ref, date, submit, navigateOnly });
+          if (submit && isLast) {
+            leaveOpen = true;
+            console.log('Jobber confirmation page left open in Chrome.');
+          }
         } finally {
-          await page.close();
+          if (!leaveOpen) await page.close();
         }
       }
     } finally {
