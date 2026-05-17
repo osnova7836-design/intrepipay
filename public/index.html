@@ -602,8 +602,8 @@ async function loadMultiTab(input) {
       else if (row0.some(c=>c.includes('rheem'))) co = 'Rheem';
       // Lessen Excel: header row has "Invoice #" and "Wo #" columns (no company name in header)
       else if (row0.some(c=>c==='wo #'||c==='wo#') && row0.some(c=>c==='invoice #'||c==='invoice#')) co = 'Lessen';
-      // Cinch Excel: header has "WO#" + "Payment method" (contains SCC#) + "Payment amount"
-      else if (row0.some(c=>c==='wo#'||c==='wo #') && row0.some(c=>c.includes('payment method')) && row0.some(c=>c.includes('payment amount'))) co = 'Cinch Home Services';
+      // Cinch Excel: header has "Work order" + "Payment method" (SCC#) + "Payment amount"
+      else if (row0.some(c=>c.includes('work order')) && row0.some(c=>c.includes('payment method')) && row0.some(c=>c.includes('payment amount'))) co = 'Cinch Home Services';
 
       // Extract check number, total, and date from row 0
       // Row 0 format: "View Payment | Rely Home" | null | null | null | date | "Check" | checkNum | total | company | cleared
@@ -655,18 +655,20 @@ async function loadMultiTab(input) {
         });
       } else if (co === 'Cinch Home Services') {
         // Cinch Excel columns: WO# | Payment | Payment number | Payment method (SCC#) | Payment amount | Date
-        // SCC# (SCCV...) is in "Payment method" column; match it against Jobber subject.
-        // CCC# in the same cell is a payment ref we don't need for matching.
+        // Cinch columns: Work order | Payment amount | [blank] | [blank] | Payment number | Payment method (SCC#) | Payment amount* | Date
+        // *Rename the second "Payment amount" to "Payment total" in the Excel so "Payment amount" is unique.
+        // SCC# (SCCV...) is in "Payment method"; CCC# in same cell is ignored.
+        const woCol     = row0.findIndex(c=>c.includes('work order'));
         const methodCol = row0.findIndex(c=>c.includes('payment method'));
         const amtCol    = row0.findIndex(c=>c.includes('payment amount'));
         const dateCol   = row0.findIndex(c=>c==='date');
         const numCol    = row0.findIndex(c=>c.includes('payment number'));
         let runningTotal = 0;
         rows.slice(1).forEach(row => {
-          const methodCell = String(row[methodCol >= 0 ? methodCol : 3]||'');
+          const methodCell = String(row[methodCol >= 0 ? methodCol : 5]||'');
           const sccM = methodCell.match(/\b(SCCV[A-Z0-9]+-\d+)\b/i);
           if (!sccM) return;
-          const rawAmt = row[amtCol >= 0 ? amtCol : 4];
+          const rawAmt = row[amtCol >= 0 ? amtCol : 1];
           if (rawAmt == null) return;
           const amount = parseFloat(String(rawAmt).replace(/[^0-9.]/g,''));
           if (isNaN(amount) || amount === 0) return;
@@ -817,11 +819,14 @@ function parseRemittance(remit, company) {
       }
     });
   } else if (co.includes('cinch')) {
-    // Cinch: SCC reference in comments
+    // Cinch: SCC# (SCCV...) in Payment method column; amount follows it in the line.
+    // Search after the SCC# to avoid date digits or WO# bleeding into the amount.
     lines.forEach(line => {
       const scc = line.match(/\b(SCCV[A-Z0-9]+-\d+)\b/i);
-      const amt = line.match(/\$?([\d,]+\.?\d{2})/g);
-      if (scc&&amt) {
+      if (!scc) return;
+      const afterSCC = line.slice(line.indexOf(scc[1]) + scc[1].length);
+      const amt = afterSCC.match(/\$?([\d,]+\.\d{2})/g);
+      if (amt) {
         const a = parseFloat(amt[amt.length-1].replace(/[$,]/g,''));
         if (!isNaN(a)&&a>0) items.push({ref:scc[1], amount:a});
       }
