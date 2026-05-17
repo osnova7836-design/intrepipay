@@ -1795,8 +1795,40 @@ function streamPayment(params, triggerBtn, invoiceNumbers = []) {
 
   es.onerror = () => {
     es.close();
-    appendLog('⚠ Connection lost — check /api/queue-status and Render logs');
+    appendLog('⚠ Connection lost — the job may still be running.');
     finish();
+    // Show a button to poll the last job result so the user knows if it succeeded.
+    const checkBtn = document.createElement('button');
+    checkBtn.textContent = 'Check result';
+    checkBtn.style.cssText = 'margin-top:8px;padding:5px 12px;border-radius:5px;border:1px solid rgba(255,255,255,0.3);background:transparent;color:#fff;font-family:"IBM Plex Mono",monospace;font-size:11px;cursor:pointer;letter-spacing:0.05em';
+    logEl.appendChild(checkBtn);
+    logEl.scrollTop = logEl.scrollHeight;
+    checkBtn.onclick = async () => {
+      checkBtn.disabled = true;
+      checkBtn.textContent = 'Checking…';
+      try {
+        const r = await fetch('/api/queue-status');
+        const data = await r.json();
+        const last = data.lastJobResult;
+        if (!last) {
+          appendLog('No result recorded yet — job may still be running. Try again shortly.');
+          checkBtn.disabled = false;
+          checkBtn.textContent = 'Check result';
+        } else if (last.success) {
+          markInvoicesPaid(invoiceNumbers);
+          resultEl.innerHTML = `<div style="background:#15803d;border-radius:6px;padding:.75rem 1rem;font-family:'IBM Plex Mono',monospace;font-size:12px;color:#fff;letter-spacing:0.04em">✓ Payment submitted successfully (confirmed via queue-status)</div>`;
+          if (triggerBtn) { triggerBtn.textContent = '✓ Applied'; triggerBtn.disabled = true; }
+          checkBtn.remove();
+        } else {
+          resultEl.innerHTML = `<div style="background:#b91c1c;border-radius:6px;padding:.75rem 1rem;font-family:'IBM Plex Mono',monospace;font-size:12px;color:#fff">✗ ${last.error || 'Unknown error'}</div>`;
+          checkBtn.remove();
+        }
+      } catch(e) {
+        appendLog('Could not reach server: ' + e.message);
+        checkBtn.disabled = false;
+        checkBtn.textContent = 'Check result';
+      }
+    };
   };
 }
 
