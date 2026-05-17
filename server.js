@@ -12,6 +12,7 @@ let playwrightRunning = false;
 const jobQueue = new Map();   // id → job
 const jobEvents = new EventEmitter();
 let jobIdSeq = 0;
+let lastJobResult = null;     // { id, success, error, finishedAt } — survives SSE disconnect
 
 function createJob(params) {
   const id = String(++jobIdSeq);
@@ -460,25 +461,29 @@ app.get('/api/playwright-payment', async (req, res) => {
     send({ type: 'log', text: `Job ${jobId} queued — waiting for local worker to pick up...` });
     console.log(`Job ${jobId} queued: clientId=${clientId} invoiceIds=${ids.join(',')} date=${date}`);
 
-    const onLog  = text => send({ type: 'log', text });
+    const onLog  = text => { if (!res.writableEnded) send({ type: 'log', text }); };
     const onDone = ({ success, error }) => {
-      clearInterval(keepAlive);
-      send({ type: 'done', success, error });
-      cleanup();
       playwrightRunning = false;
-      res.end();
+      clearInterval(keepAlive);
+      sseCleanup();
+      if (!res.writableEnded) {
+        send({ type: 'done', success, error });
+        res.end();
+      }
+    };
+
+    const sseCleanup = () => {
+      jobEvents.off(`${jobId}:log`,  onLog);
+      jobEvents.off(`${jobId}:done`, onDone);
     };
 
     jobEvents.on(`${jobId}:log`,  onLog);
     jobEvents.on(`${jobId}:done`, onDone);
 
-    const cleanup = () => {
-      jobEvents.off(`${jobId}:log`,  onLog);
-      jobEvents.off(`${jobId}:done`, onDone);
-    };
-
-    // If the browser closes the connection before the job finishes, clean up.
-    res.on('close', () => { clearInterval(keepAlive); cleanup(); playwrightRunning = false; });
+    // If browser disconnects before job finishes: stop keep-alive and remove SSE listeners,
+    // but leave playwrightRunning=true so a reconnecting EventSource doesn't queue a duplicate job.
+    // The onDone handler above will reset it when the worker finishes.
+    res.on('close', () => { clearInterval(keepAlive); sseCleanup(); });
     return;
   }
 
@@ -545,6 +550,7 @@ app.get('/api/queue-status', (req, res) => {
     playwrightRunning,
     jobQueueSize: jobQueue.size,
     jobs: [...jobQueue.values()].map(j => ({ id: j.id, status: j.status, params: j.params })),
+    lastJobResult,
   });
 });
 
@@ -582,6 +588,7 @@ app.post('/api/jobs/:id/done', workerAuth, (req, res) => {
     job.status = success ? 'completed' : 'failed';
     jobQueue.delete(req.params.id);
   }
+  lastJobResult = { id: req.params.id, success, error: error || null, finishedAt: new Date().toISOString() };
   jobEvents.emit(`${req.params.id}:done`, { success, error });
   res.json({ ok: true });
 });
