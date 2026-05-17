@@ -111,13 +111,13 @@ async function selectPaymentMethod(page, type) {
   };
   const candidates = aliases[tl] || [tl];
 
-  const match = opts.find(o => o.label.toLowerCase() === type.toLowerCase())
-             || opts.find(o => candidates.some(a => o.label.toLowerCase().includes(a)));
+  let matchIdx = opts.findIndex(o => o.label.toLowerCase() === type.toLowerCase());
+  if (matchIdx < 0) matchIdx = opts.findIndex(o => candidates.some(a => o.label.toLowerCase().includes(a)));
 
-  if (!match) throw new Error(`No option matches "${type}". Available: ${opts.map(o => o.label).join(', ')}`);
+  if (matchIdx < 0) throw new Error(`No option matches "${type}". Available: ${opts.map(o => o.label).join(', ')}`);
 
-  await select.selectOption({ value: match.value });
-  console.log(`  Payment method: selected "${match.label}"`);
+  await select.selectOption({ index: matchIdx });
+  console.log(`  Payment method: selected "${opts[matchIdx].label}"`);
 }
 
 async function fillReference(page, type, ref) {
