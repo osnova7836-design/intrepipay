@@ -245,17 +245,15 @@ app.get('/api/check-payments-raw', async (req, res) => {
   try {
     const token = await getValidToken();
     const query = `{
-      invoices(first: 10, filter: { createdAt: { after: "2025-12-31T23:59:59Z" } }) {
+      invoicePayments(first: 10) {
         nodes {
-          invoiceNumber
-          client { name }
-          payments {
-            nodes {
-              amount
-              type
-              details
-              receivedAt
-            }
+          amount
+          receivedDate
+          type
+          details
+          invoice {
+            invoiceNumber
+            client { name }
           }
         }
       }
