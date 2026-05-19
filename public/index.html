@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>IntrepiPay — A bold, smarter way to handle payments</title>
+<title>TrackPoint_OS — A bold, smarter way to handle payments</title>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500&display=swap" rel="stylesheet">
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -253,7 +253,7 @@ tr:hover td{background:var(--surface2)}
     <div class="empty-state">
       <div class="empty-icon">⚡</div>
       <div class="empty-title">Ready to reconcile</div>
-      <div class="empty-sub">Upload Jobber export, add payments with remittances, hit run. IntrepiPay matches programmatically and only uses AI for the hard cases.</div>
+      <div class="empty-sub">Upload Jobber export, add payments with remittances, hit run. TrackPoint_OS matches programmatically and only uses AI for the hard cases.</div>
     </div>
   </div>
 
@@ -1407,7 +1407,7 @@ async function resolveWithAI(needsAIResults, allResults) {
 
   const paymentsCtx = needsAIResults.map((r,i)=>`PAYMENT ${i+1}: ${r.co} | Ref:${r.ref||'?'} | ${r.amt||'?'}\n${payments.find(p=>p.co===r.co&&p.ref===r.ref)?.remit||''}`).join('\n---\n');
 
-  const sys = `You are IntrepiPay. Match remittance line items to Jobber invoices.
+  const sys = `You are TrackPoint_OS. Match remittance line items to Jobber invoices.
 COMPANY RULES:
 - First American/FALCON: USE ONLY Work Order column (9-digit, 621/622 prefix). IGNORE Vendor Invoice and FALCON Invoice.
 - Rely: Claim # matches Subject directly
@@ -1657,7 +1657,7 @@ function exportRecon() {
     XLSX.utils.book_append_sheet(wb, ws, tabName);
   });
 
-  XLSX.writeFile(wb, 'IntrepiPay-Reconciliation-'+new Date().toISOString().split('T')[0]+'.xlsx');
+  XLSX.writeFile(wb, 'TrackPoint_OS-Reconciliation-'+new Date().toISOString().split('T')[0]+'.xlsx');
 }
 
 function exportBilling() {
@@ -1730,7 +1730,7 @@ function exportBilling() {
   const ws = XLSX.utils.aoa_to_sheet(rows);
   ws['!cols'] = [{wch:16},{wch:14},{wch:14},{wch:16},{wch:14}];
   XLSX.utils.book_append_sheet(wb, ws, 'Billing Actions');
-  XLSX.writeFile(wb, 'IntrepiPay-BillingActions-'+new Date().toISOString().split('T')[0]+'.xlsx');
+  XLSX.writeFile(wb, 'TrackPoint_OS-BillingActions-'+new Date().toISOString().split('T')[0]+'.xlsx');
 }
 
 // ── API Key ───────────────────────────────────────────────────────────────────

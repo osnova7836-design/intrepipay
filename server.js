@@ -657,4 +657,4 @@ app.get('/api/status', (req, res) => {
 
 // ── Start server ──────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`IntrepiPay running on port ${PORT}`));
+app.listen(PORT, () => console.log(`TrackPoint_OS running on port ${PORT}`));

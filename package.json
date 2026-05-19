@@ -1,7 +1,7 @@
 {
-  "name": "intrepipay",
+  "name": "trackpoint-os",
   "version": "1.0.0",
-  "description": "IntrepiPay — Payment reconciliation for home service businesses",
+  "description": "TrackPoint_OS — Payment reconciliation for home service businesses",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
