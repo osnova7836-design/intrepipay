@@ -101,7 +101,7 @@ app.get('/auth/jobber/callback', async (req, res) => {
     tokenStore = {
       access_token: data.access_token,
       refresh_token: data.refresh_token,
-      expires_at: Date.now() + (data.expires_in * 1000)
+      expires_at: Date.now() + ((data.expires_in || 3600) * 1000)
     };
     saveTokens(tokenStore);
     console.log('Jobber connected successfully');
@@ -128,11 +128,17 @@ async function getValidToken() {
         refresh_token: tokenStore.refresh_token
       })
     });
-    const data = await response.json();
+    let data;
+    try { data = await response.json(); } catch (e) { data = {}; }
+    if (!data.access_token) {
+      tokenStore = { access_token: null, refresh_token: null, expires_at: null };
+      saveTokens(tokenStore);
+      throw new Error('Not connected to Jobber');
+    }
     tokenStore = {
       access_token: data.access_token,
       refresh_token: data.refresh_token,
-      expires_at: Date.now() + (data.expires_in * 1000)
+      expires_at: Date.now() + ((data.expires_in || 3600) * 1000)
     };
     saveTokens(tokenStore);
   }
@@ -191,13 +197,23 @@ app.get('/api/invoices', async (req, res) => {
       if (data.errors) {
         const isThrottled = data.errors.some(e => e.extensions?.code === 'THROTTLED');
         if (isThrottled) {
-          // Wait 15s and retry this page once before giving up
           console.warn(`Throttled on page ${pageCount + 1} — waiting 15s then retrying`);
           await new Promise(r => setTimeout(r, 15000));
           continue;
         }
+        const isUnauth = data.errors.some(e =>
+          e.extensions?.code === 'UNAUTHENTICATED' || /unauthori[sz]ed/i.test(e.message||'')
+        );
+        if (isUnauth) {
+          return res.status(401).json({ error: 'Jobber session expired — click Connect Jobber to re-authenticate' });
+        }
         console.error('GraphQL errors:', JSON.stringify(data.errors));
         return res.status(400).json({ error: data.errors.map(e => e.message).join(', ') });
+      }
+
+      if (!data.data?.invoices) {
+        console.error('Unexpected Jobber response:', JSON.stringify(data).substring(0, 500));
+        return res.status(401).json({ error: 'Jobber session expired — click Connect Jobber to re-authenticate' });
       }
 
       const page = data.data.invoices;

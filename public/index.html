@@ -210,10 +210,10 @@ tr:hover td{background:var(--surface2)}
         <div class="step-title">Bank statement <span style="font-size:9px;color:var(--text-muted);text-transform:none;letter-spacing:0">(optional)</span></div>
       </div>
       <div class="upload-zone" id="bz">
-        <input type="file" accept=".xlsx,.xls,.csv" onchange="loadBank(this)">
+        <input type="file" accept=".xlsx,.xls,.csv,.pdf" onchange="loadBank(this)">
         <div class="uz-icon">🏦</div>
         <div class="uz-title" id="bt">Drop bank export</div>
-        <div class="uz-sub">Excel or CSV · BofA format</div>
+        <div class="uz-sub">Excel, CSV or PDF · BofA format</div>
       </div>
       <div class="status-line" id="bs"></div>
       <div id="bank-pull-list" style="display:none;margin-top:.75rem"></div>
@@ -289,7 +289,7 @@ tr:hover td{background:var(--surface2)}
         <button class="modal-tab" onclick="setSrc('csv',this)">CSV / Excel</button>
         <button class="modal-tab" onclick="setSrc('pdf',this)">PDF</button>
       </div>
-      <div id="ms-text"><textarea id="m-remit" placeholder="Paste EFT report, portal CSV text, or any remittance..."></textarea></div>
+      <div id="ms-text"><textarea id="m-remit" placeholder="Paste EFT report, portal CSV text, or any remittance..." oninput="autoDetectCo(this.value)"></textarea></div>
       <div id="ms-csv" style="display:none">
         <div class="upload-zone" id="mc-zone"><input type="file" accept=".csv,.xlsx,.xls" onchange="loadMCSV(this)">
           <div class="uz-icon">📄</div><div class="uz-title" id="mc-title">Drop CSV or Excel</div><div class="uz-sub">Rely portal, Lessen, etc.</div>
@@ -450,6 +450,9 @@ window.addEventListener('DOMContentLoaded', async () => {
 // ── Step 2: Bank ──────────────────────────────────────────────────────────────
 async function loadBank(input) {
   const file = input.files[0]; if (!file) return;
+  if (file.name.toLowerCase().endsWith('.pdf')) {
+    await loadBankPDF(file); input.value=''; checkReady(); return;
+  }
   el('bz').classList.add('has-file');
   el('bt').textContent = '⟳ Reading...';
   try {
@@ -487,6 +490,105 @@ async function loadBank(input) {
   input.value=''; checkReady();
 }
 
+async function loadBankPDF(file) {
+  el('bz').classList.add('has-file');
+  el('bt').textContent = '⟳ Reading PDF...';
+  try {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
+    const buf = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({data: buf}).promise;
+
+    // Reconstruct lines by grouping text items with the same y-coordinate
+    const allLines = [];
+    for (let p = 1; p <= pdf.numPages; p++) {
+      const page = await pdf.getPage(p);
+      const content = await page.getTextContent();
+      const lineMap = new Map();
+      for (const item of content.items) {
+        const y = Math.round(item.transform[5]);
+        if (!lineMap.has(y)) lineMap.set(y, []);
+        lineMap.get(y).push({ x: item.transform[4], str: item.str });
+      }
+      [...lineMap.keys()].sort((a,b)=>b-a).forEach(y => {
+        const line = lineMap.get(y).sort((a,b)=>a.x-b.x).map(i=>i.str).join(' ').trim();
+        if (line) allLines.push(line);
+      });
+    }
+
+    const fullText = allLines.join('\n');
+    // Infer statement year
+    const yearMatch = fullText.match(/(?:through|ending|period|statement)\s[\s\S]{0,40}?\b(20\d{2})\b/i) || fullText.match(/\b(20\d{2})\b/);
+    const year = yearMatch ? parseInt(yearMatch[1]) : new Date().getFullYear();
+
+    // ── BofA online banking print format: MM/DD/YYYY  Description  Type  $Amount ──
+    // Continuation lines (ID:, INDN:, etc.) follow the main transaction line.
+    const txns = [];
+    let i = 0;
+    while (i < allLines.length) {
+      const line = allLines[i];
+      // Match: date  ...description...  $amount
+      const m = line.match(/^(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+\$?([\d,]+\.\d{2})\s*$/);
+      if (!m) { i++; continue; }
+      const [, dateStr, rawDesc, amtStr] = m;
+      const amt = parseFloat(amtStr.replace(/,/g,''));
+      if (isNaN(amt) || amt <= 0) { i++; continue; }
+      const [mm, dd, yyyy] = dateStr.split('/');
+      const isoDate = `${yyyy}-${mm}-${dd}`;
+
+      // Collect continuation lines for full ACH description
+      let fullDesc = rawDesc;
+      i++;
+      while (i < allLines.length) {
+        const next = allLines[i];
+        if (/^\d{2}\/\d{2}\/\d{4}/.test(next) ||
+            /^(Cleared|Pending|Posted|Showing|View:|Transactions|Balance|Posting date)/i.test(next)) break;
+        fullDesc += ' ' + next;
+        i++;
+      }
+
+      // Extract payment ID: strip CO ID first so individual ID survives
+      const stripped = fullDesc.replace(/\bCO\s*ID:\S+/gi, '');
+      const payId = (stripped.match(/\bID:([A-Z0-9]{4,})/i)||[])[1] ||
+                    (fullDesc.match(/EFTPY([0-9]+)/i)||[])[1] || null;
+      txns.push({ date: isoDate, desc: fullDesc.trim(), amount: amt, paymentId: payId, co: getBankCo(fullDesc) });
+    }
+
+    // Fallback: traditional statement PDF with MM/DD dates and section headers
+    if (txns.length === 0) {
+      let inDeposits = false;
+      for (const line of allLines) {
+        if (/deposits?\s*(and\s*(other\s*)?credits?)?/i.test(line) && !/total/i.test(line)) { inDeposits = true; continue; }
+        if (inDeposits && /^(withdrawals?|checks?\s+paid|electronic\s+with|service\s+(fee|charge)|daily\s+ending|total\s+deposits?)/i.test(line)) { inDeposits = false; continue; }
+        if (!inDeposits) continue;
+        const m = line.match(/^(\d{2}\/\d{2})\s+(.+?)\s+([\d,]+\.\d{2})(?:\s+[\d,]+\.\d{2})?$/);
+        if (!m) continue;
+        const [, mmdd, desc, amtStr] = m;
+        const amt = parseFloat(amtStr.replace(/,/g,''));
+        if (isNaN(amt) || amt <= 0) continue;
+        const [mm, dd] = mmdd.split('/');
+        const payId = (desc.match(/(?:PAYABLES\s+)?ID:([A-Z0-9]+)/i)||[])[1] || (desc.match(/EFTPY([0-9]+)/i)||[])[1] || null;
+        txns.push({ date: `${year}-${mm}-${dd}`, desc: desc.trim(), amount: amt, paymentId: payId, co: getBankCo(desc) });
+      }
+    }
+
+    if (txns.length === 0) {
+      el('bt').textContent = '⚠ No deposits found in PDF';
+      const bs = el('bs'); bs.style.display=''; bs.textContent = 'Could not parse — open browser console (F12) to see extracted lines';
+      console.log('Bank PDF lines extracted:', allLines);
+      return;
+    }
+
+    bankTxns = txns;
+    el('bt').textContent = '✓ ' + file.name;
+    const bs = el('bs'); bs.style.display=''; bs.textContent = `${bankTxns.length} credit deposits loaded from PDF`;
+    el('s2').classList.add('done');
+    renderBankPullList();
+  } catch(e) {
+    el('bt').textContent = '⚠ Error reading PDF';
+    console.error('Bank PDF parse error:', e);
+  }
+}
+
 function renderBankPullList() {
   const container = document.getElementById('bank-pull-list');
   if (!bankTxns.length) { container.style.display = 'none'; return; }
@@ -499,7 +601,7 @@ function renderBankPullList() {
       <label style="display:flex;align-items:center;gap:.625rem;padding:.4rem 0;border-bottom:1px solid rgba(255,255,255,0.05);cursor:pointer">
         <input type="checkbox" data-pull="${i}"
           style="width:14px;height:14px;accent-color:var(--teal);flex-shrink:0;cursor:pointer"
-          onchange="this.closest('label').style.opacity=this.checked?'0.4':'1'">
+          onchange="pullBankRow(this,${i})">
         <span style="flex:1;font-family:'IBM Plex Mono',monospace;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${name}${payRef}</span>
         <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--text-muted);flex-shrink:0">${date}</span>
         <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:600;color:#86efac;flex-shrink:0">${fmt(t.amount)}</span>
@@ -557,6 +659,10 @@ function loadMCSV(input) {
 }
 function _mCSVAutoFill(line) {
   if (!line) return;
+  if (/dispatch\s*id/i.test(line)) {
+    if (!el('m-co').value) el('m-co').value = 'Frontdoor';
+    return;
+  }
   if (!/Check\s*#/i.test(line)) return; // only applies to Lessen check-row format
   if (!el('m-ref').value) {
     const refM = line.match(/Check\s*#[:\s]+#?(\w+)/i);
@@ -603,9 +709,9 @@ async function loadMPDF(input) {
     }
     if (!el('m-ref').value) {
       const refM = mPDF.match(/\bCheck\s*#\s*[:\-]?\s*([A-Z0-9\-]{3,20})/i)
-                || mPDF.match(/\bPayment\s*#\s*[:\-]?\s*([A-Z0-9\-]{3,20})/i)
-                || mPDF.match(/\bRef(?:erence)?\s*#?\s*[:\-]\s*([A-Z0-9\-]{3,20})/i)
-                || mPDF.match(/\bDate:\s*(\d{1,2}\/\d{1,2}\/\d{4})/i);
+                || mPDF.match(/\bPayment\s*(?:ID|#)\s*[:\-]?\s*([A-Z0-9\-]{3,20})/i)
+                || mPDF.match(/\bTransaction\s*(?:ID|#)\s*[:\-]?\s*([A-Z0-9\-]{3,20})/i)
+                || mPDF.match(/\bRef(?:erence)?\s*#?\s*[:\-]\s*([A-Z0-9\-]{3,20})/i);
       if (refM) el('m-ref').value = refM[1];
     }
     // ePay means no real check number — clear it so the user can enter the bank reference manually
@@ -841,11 +947,38 @@ async function loadMultiTab(input) {
   input.value = '';
 }
 
+function autoDetectCo(text) {
+  if (el('m-co').value) return; // don't override manual selection
+  if (/\bEFTPY\b|\bFALCON\b|First\s*American/i.test(text))
+    el('m-co').value = 'First American / FALCON';
+  else if (/dispatch\s*id|\bAMERICA\d{5,}\b/i.test(text))
+    el('m-co').value = 'Frontdoor';
+  else if (/\bSCCV[A-Z0-9]+-\d+\b/i.test(text))
+    el('m-co').value = 'Cinch Home Services';
+  else if (/\bClaim\s*#/i.test(text))
+    el('m-co').value = 'Rely Home Warranty';
+}
+
 function getRemit() {
   if (modalSrc==='text') return el('m-remit').value.trim();
   if (modalSrc==='csv') return mCSV||'';
   if (modalSrc==='pdf') return mPDF||'';
   return '';
+}
+const BANK_CO_MAP = {
+  'All County':     'All County First Choice',
+  'Cinch':          'Cinch Home Services',
+  'First American': 'First American / FALCON',
+  'Rely':           'Rely Home Warranty',
+};
+function pullBankRow(cb, i) {
+  cb.closest('label').style.opacity = cb.checked ? '0.4' : '1';
+  if (!cb.checked) return;
+  const t = bankTxns[i];
+  openModal();
+  if (t.co) el('m-co').value = BANK_CO_MAP[t.co] || t.co;
+  if (t.paymentId) el('m-ref').value = t.paymentId;
+  el('m-amt').value = '$' + t.amount.toFixed(2);
 }
 function openModal() {
   el('modal').style.display='flex';
@@ -938,12 +1071,41 @@ function parseRemittance(remit, company) {
       }
     });
   } else if (co.includes('frontdoor')) {
-    // Frontdoor: Dispatch ID
-    const dispatchMatch = remit.match(/Dispatch\s+ID\s+(\d+)/i);
-    const amtMatch = remit.match(/Net\s+\$?([\d,]+\.?\d{2})/i)||remit.match(/Payment\s+Amount\s+\$?([\d,]+\.?\d{2})/i);
-    const payRef = remit.match(/Payment\s+#\s*E?-?(\d+)/i);
-    if (dispatchMatch&&amtMatch) {
-      items.push({ref:dispatchMatch[1], amount:parseFloat(amtMatch[1].replace(/,/g,'')), secondary_ref:payRef?payRef[1]:''});
+    const sep = lines[0]?.includes('\t') ? '\t' : ',';
+    const hdr0 = lines[0] || '';
+    if (/dispatch.*id/i.test(hdr0)) {
+      // Excel/CSV with header row — find columns by name
+      const hdrCells = hdr0.split(sep).map(h=>h.trim().toLowerCase().replace(/"/g,''));
+      const diCol  = hdrCells.findIndex(h=>/dispatch.*id/i.test(h));
+      const vaCol  = hdrCells.findIndex(h=>/voucher.*amount/i.test(h));
+      const invCol = hdrCells.findIndex(h=>/invoice.*number/i.test(h));
+      lines.slice(1).forEach(line => {
+        const cells = line.split(sep).map(c=>c.trim().replace(/"/g,''));
+        const ref = diCol>=0 ? cells[diCol] : '';
+        if (!ref) return;
+        const amt = parseFloat((cells[vaCol>=0?vaCol:6]||'').replace(/[$,]/g,''));
+        if (isNaN(amt)||amt<=0) return;
+        items.push({ref, amount:amt, secondary_ref:invCol>=0?cells[invCol]:cells[1]||''});
+      });
+    } else if (lines.some(l=>/\bAMERICA\d+\b/i.test(l))) {
+      // Tab-separated, no header — use fixed column positions
+      // Invoice Date(0), Invoice Number(1), Dispatch ID(2), ..., Voucher Amount(6)
+      lines.forEach(line => {
+        const cells = line.split('\t').map(c=>c.trim());
+        const ref = cells[2]||'';
+        if (!ref||ref.length<4) return;
+        const amt = parseFloat((cells[6]||'').replace(/[$,]/g,''));
+        if (isNaN(amt)||amt<=0) return;
+        items.push({ref, amount:amt, secondary_ref:cells[1]||''});
+      });
+    } else {
+      // Legacy text/PDF format
+      const dispatchMatch = remit.match(/Dispatch\s+ID\s*[:#]?\s*(\S+)/i);
+      const amtMatch = remit.match(/Net\s+\$?([\d,]+\.?\d{2})/i)||remit.match(/(?:Voucher|Payment)\s+Amount\s+\$?([\d,]+\.?\d{2})/i);
+      const payRef = remit.match(/Payment\s+#\s*E?-?(\d+)/i);
+      if (dispatchMatch&&amtMatch) {
+        items.push({ref:dispatchMatch[1], amount:parseFloat(amtMatch[1].replace(/,/g,'')), secondary_ref:payRef?payRef[1]:''});
+      }
     }
   } else if (co.includes('rheem')) {
     // Rheem: Document Reference Number (WCN), may be comma-separated pairs
@@ -1037,15 +1199,31 @@ function lookupJobber(ref, company) {
   return null;
 }
 
-function findBankMatch(payment) {
+function extractBankRef(desc) {
+  // ACH format: "... ID:2X6Z24 INDN:... CO ID:9000409234 CCD"
+  // Strip CO ID first so the individual transaction ID survives
+  const stripped = desc.replace(/\bCO\s+ID:\S+/gi, '');
+  const achId = stripped.match(/\bID:([A-Z0-9]{4,})/i);
+  if (achId) return achId[1];
+
+  const skip = /^(DEPO|DEPOSIT|ACH|EFT|MOBILE|BKOFAMERICA|BKOF|WIRE|XFER|PMT|PAYMENT|CHECK|CHK|INDN|DES|ID|CO|MEMO|ORIG|TRACE|CCD|PPD|WEB)$/i;
+  const tokens = (desc.match(/\b([A-Z0-9]{5,})\b/g) || []).filter(t => /\d/.test(t) && !skip.test(t));
+  return tokens[tokens.length - 1] || '';
+}
+
+function findBankMatch(payment, computedTotal=0) {
   if (bankTxns.length===0) return null;
-  const amt = parseFloat(String(payment.amt||'0').replace(/[$,]/g,''));
+  const amt = parseFloat(String(payment.amt||'0').replace(/[$,]/g,'')) || computedTotal;
   const co = (payment.co||'').toLowerCase();
+
+  function applyRef(txn) {
+    if (!payment.ref) payment.ref = extractBankRef(txn.desc);
+  }
 
   // 1. Match by explicit payment ID (ACH payers: First American, Rheem, etc.)
   if (payment.ref) {
     const byId = bankTxns.find(t=>t.paymentId&&t.paymentId===payment.ref);
-    if (byId) return fmtDate(byId.date)+' · '+byId.desc.substring(0,40)+' · '+fmt(byId.amount);
+    if (byId) return byId;
   }
 
   if (amt > 0) {
@@ -1053,13 +1231,13 @@ function findBankMatch(payment) {
     //    (Rely mobile deposits: check # appears in the deposit description)
     if (payment.ref) {
       const byRefAmt = bankTxns.find(t=>t.desc.includes(payment.ref)&&Math.abs(t.amount-amt)<0.02);
-      if (byRefAmt) return fmtDate(byRefAmt.date)+' · '+byRefAmt.desc.substring(0,40)+' · '+fmt(byRefAmt.amount);
+      if (byRefAmt) return byRefAmt;
     }
 
     // 3. Match by company name in description + amount (non-Rely ACH payers)
     if (!co.includes('rely')) {
       const byCoAmt = bankTxns.find(t=>Math.abs(t.amount-amt)<0.02&&t.co&&co.includes(t.co.toLowerCase()));
-      if (byCoAmt) return fmtDate(byCoAmt.date)+' · '+byCoAmt.desc.substring(0,40)+' · '+fmt(byCoAmt.amount);
+      if (byCoAmt) { applyRef(byCoAmt); return byCoAmt; }
     }
 
     // 4. Amount-only fallback — skip transactions tagged as a different recognized company
@@ -1072,7 +1250,7 @@ function findBankMatch(payment) {
       }
       return true;
     });
-    if (byAmt) return fmtDate(byAmt.date)+' · '+byAmt.desc.substring(0,40)+' · '+fmt(byAmt.amount);
+    if (byAmt) { applyRef(byAmt); return byAmt; }
   }
   return null;
 }
@@ -1080,7 +1258,9 @@ function findBankMatch(payment) {
 // ── Main matching function ────────────────────────────────────────────────────
 function matchPayment(payment) {
   const items = parseRemittance(payment.remit, payment.co);
-  const bankMatch = findBankMatch(payment);
+  const computedTotal = items.reduce((s,i)=>s+Math.abs(i.amount),0);
+  const matchedTxn = findBankMatch(payment, computedTotal);
+  const bankMatch = matchedTxn ? fmtDate(matchedTxn.date)+' · '+matchedTxn.desc.substring(0,40)+' · '+fmt(matchedTxn.amount) : null;
 
   const lineItems = items.map(item => {
     const jobberRow = lookupJobber(item.ref, payment.co);
@@ -1112,7 +1292,7 @@ function matchPayment(payment) {
     else if (invStatus === 'Draft') { status='draft'; note='Draft → send invoice & update date'; }
     else if (diff > 0.01) { status='shortpay'; note='Short pay: paid '+fmt(Math.abs(item.amount))+' vs invoiced '+fmt(jobberAmt); }
     else if (diff < -0.01) { status='overpay'; note='Over pay: paid '+fmt(Math.abs(item.amount))+' vs invoiced '+fmt(jobberAmt); }
-    else if (invStatus === 'Paid') { status='match'; note='Already paid in Jobber — confirm match'; }
+    else if (invStatus === 'Paid') { status='already_paid'; note='Already paid in Jobber'; }
     else if (invStatus === 'Past Due' || invStatus === 'Awaiting Payment') { status='match'; note='Mark paid in Jobber'; }
 
     return {
@@ -1137,12 +1317,14 @@ function matchPayment(payment) {
   const discrepancies = lineItems.filter(i=>i.status==='mismatch'||i.status==='missing').length;
   const unresolved = lineItems.filter(i=>['missing','draft','mismatch'].includes(i.status));
 
+  const resolvedRef = payment.ref || (matchedTxn ? (matchedTxn.paymentId || extractBankRef(matchedTxn.desc)) : '');
   return {
     co: payment.co,
-    ref: payment.ref,
+    ref: resolvedRef,
     amt: payment.amt,
     date: payment.date || '',
     bank_match: bankMatch,
+    bank_id: matchedTxn ? (matchedTxn.paymentId || null) : null,
     line_items: lineItems.sort((a,b)=>parseInt(a.jobber_invoice||0)-parseInt(b.jobber_invoice||0)),
     total_paid: totalPaid,
     total_invoiced: totalInvoiced,
@@ -1195,6 +1377,7 @@ async function run() {
 
   window._lastResults = results;
   renderReport(results);
+  autoReconcileBankList(results);
   _restoreResolvedUI();
   btn.disabled=false; btn.textContent='▶ Run reconciliation';
 }
@@ -1262,6 +1445,24 @@ RESPOND ONLY VALID JSON:
   } catch(e) { console.warn('AI parse error:', e); }
 }
 
+// ── Auto-check bank list rows for fully-reconciled already-paid payments ──────
+function autoReconcileBankList(results) {
+  if (!bankTxns.length) return;
+  for (const r of results) {
+    const nonDeductions = r.line_items.filter(i => i.status !== 'deduction');
+    if (!nonDeductions.length) continue;
+    if (!nonDeductions.every(i => i.status === 'already_paid')) continue;
+    // All items already paid in Jobber — find and check the bank row
+    let idx = -1;
+    if (r.bank_id) idx = bankTxns.findIndex(t => t.paymentId === r.bank_id);
+    if (idx < 0 && r.total_paid > 0)
+      idx = bankTxns.findIndex(t => Math.abs(t.amount - r.total_paid) < 0.01);
+    if (idx < 0) continue;
+    const cb = document.querySelector(`input[data-pull="${idx}"]`);
+    if (cb && !cb.checked) { cb.checked = true; cb.closest('label').style.opacity = '0.4'; }
+  }
+}
+
 // ── Render report ─────────────────────────────────────────────────────────────
 function renderReport(results) {
   const totalPaid = results.reduce((s,r)=>s+(r.total_paid||0),0);
@@ -1312,6 +1513,7 @@ function renderReport(results) {
                 i.status==='deduction'?'<span class="badge b-adjustment">⚠ Adjustment</span>':
                 i.status==='shortpay'?'<span class="badge b-shortpay">⚠ Short Pay</span>':
                 i.status==='overpay'?'<span class="badge b-overpay">⚠ Over Pay</span>':
+                i.status==='already_paid'?'<span class="badge b-match">✓ Already Paid</span>':
                 '<span class="badge b-match">✓ Match</span>';
               return `<tr class="${rowCls}">
                 <td style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--text-muted)">${i.ref||'—'}</td>
@@ -1593,7 +1795,12 @@ function renderApplyBar(r) {
   const deductions = r.line_items.filter(i => i.status === 'deduction');
   const blockKey = (r.ref || r.co || '').replace(/[^a-zA-Z0-9]/g, '_');
 
-  if (matchedItems.length === 0 && deductions.length === 0) return '';
+  const alreadyPaid = r.line_items.filter(i => i.status === 'already_paid');
+  if (matchedItems.length === 0 && deductions.length === 0) {
+    if (alreadyPaid.length > 0)
+      return `<div class="apply-bar"><span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--green)">✓ Already applied in Jobber (${alreadyPaid.length} payment${alreadyPaid.length!==1?'s':''})</span></div>`;
+    return '';
+  }
 
   const deductionSection = deductions.length === 0 ? '' : `
     <div class="deduction-bar" id="dbar-${blockKey}">
