@@ -240,6 +240,42 @@ app.get('/api/invoices', async (req, res) => {
   }
 });
 
+// ── Check payments — raw discovery (inspect schema) ──────────────────────────
+app.get('/api/check-payments-raw', async (req, res) => {
+  try {
+    const token = await getValidToken();
+    const query = `{
+      invoices(first: 10, filter: { createdAt: { after: "2025-12-31T23:59:59Z" } }) {
+        nodes {
+          invoiceNumber
+          client { name }
+          payments {
+            nodes {
+              amount
+              type
+              details
+              receivedAt
+            }
+          }
+        }
+      }
+    }`;
+    const response = await fetch(GRAPHQL_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+        'X-JOBBER-GRAPHQL-VERSION': '2025-04-16'
+      },
+      body: JSON.stringify({ query })
+    });
+    const data = await response.json();
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Add a line item to a Jobber invoice ──────────────────────────────────────
 app.post('/api/add-line-item', async (req, res) => {
   try {
