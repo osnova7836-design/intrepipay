@@ -289,7 +289,7 @@ tr:hover td{background:var(--surface2)}
         <button class="modal-tab" onclick="setSrc('csv',this)">CSV / Excel</button>
         <button class="modal-tab" onclick="setSrc('pdf',this)">PDF</button>
       </div>
-      <div id="ms-text"><textarea id="m-remit" placeholder="Paste EFT report, portal CSV text, or any remittance..." oninput="autoDetectCo(this.value)"></textarea></div>
+      <div id="ms-text"><textarea id="m-remit" placeholder="Paste EFT report, portal CSV text, or any remittance..." oninput="autoDetectCo(this.value); autoExtractRef(this.value)"></textarea></div>
       <div id="ms-csv" style="display:none">
         <div class="upload-zone" id="mc-zone"><input type="file" accept=".csv,.xlsx,.xls" onchange="loadMCSV(this)">
           <div class="uz-icon">📄</div><div class="uz-title" id="mc-title">Drop CSV or Excel</div><div class="uz-sub">Rely portal, Lessen, etc.</div>
@@ -707,6 +707,12 @@ async function loadMPDF(input) {
                 || mPDF.match(/\bPayment\s+Amount:\s*\$?([\d,]+\.\d{2})/i);
       if (amtM) el('m-amt').value = '$' + amtM[1];
     }
+    // First American / FALCON: EFTPY number is the unique payment identifier per remittance.
+    // Extract it before the generic patterns so it always wins for FA payments.
+    if (!el('m-ref').value) {
+      const eftpyM = mPDF.match(/\bEFTPY(\d+)\b/i);
+      if (eftpyM) el('m-ref').value = 'EFTPY' + eftpyM[1];
+    }
     if (!el('m-ref').value) {
       const refM = mPDF.match(/\bCheck\s*#\s*[:\-]?\s*([A-Z0-9\-]{3,20})/i)
                 || mPDF.match(/\bPayment\s*(?:ID|#)\s*[:\-]?\s*([A-Z0-9\-]{3,20})/i)
@@ -959,6 +965,12 @@ function autoDetectCo(text) {
     el('m-co').value = 'Rely Home Warranty';
 }
 
+function autoExtractRef(text) {
+  if (el('m-ref').value) return; // don't override manual entry
+  const eftpyM = text.match(/\bEFTPY(\d+)\b/i);
+  if (eftpyM) el('m-ref').value = 'EFTPY' + eftpyM[1];
+}
+
 function getRemit() {
   if (modalSrc==='text') return el('m-remit').value.trim();
   if (modalSrc==='csv') return mCSV||'';
@@ -977,7 +989,9 @@ function pullBankRow(cb, i) {
   const t = bankTxns[i];
   openModal();
   if (t.co) el('m-co').value = BANK_CO_MAP[t.co] || t.co;
-  if (t.paymentId) el('m-ref').value = t.paymentId;
+  // First American bank ref is always the same non-unique ACH ID — leave m-ref blank so
+  // the EFTPY number from the remittance PDF fills it instead.
+  if (t.paymentId && t.co !== 'First American') el('m-ref').value = t.paymentId;
   el('m-amt').value = '$' + t.amount.toFixed(2);
 }
 function openModal() {
