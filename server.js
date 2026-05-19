@@ -245,11 +245,11 @@ app.get('/api/check-payments-raw', async (req, res) => {
   try {
     const token = await getValidToken();
     const query = `{
-      __type(name: "PaymentRecord") {
-        fields {
-          name
-          type { name kind ofType { name } }
-        }
+      adjustmentType: __type(name: "IncomeAdjustmentType") {
+        enumValues { name }
+      }
+      allocation: __type(name: "PaymentRecordAllocationInterface") {
+        fields { name type { name kind ofType { name } } }
       }
     }`;
     const response = await fetch(GRAPHQL_URL, {
