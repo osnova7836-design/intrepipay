@@ -245,16 +245,9 @@ app.get('/api/check-payments-raw', async (req, res) => {
   try {
     const token = await getValidToken();
     const query = `{
-      invoicePayments(first: 10) {
-        nodes {
-          amount
-          receivedDate
-          type
-          details
-          invoice {
-            invoiceNumber
-            client { name }
-          }
+      __type(name: "Query") {
+        fields {
+          name
         }
       }
     }`;
