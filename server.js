@@ -245,9 +245,10 @@ app.get('/api/check-payments-raw', async (req, res) => {
   try {
     const token = await getValidToken();
     const query = `{
-      __type(name: "Query") {
+      __type(name: "PaymentRecord") {
         fields {
           name
+          type { name kind ofType { name } }
         }
       }
     }`;
