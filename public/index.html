@@ -1248,11 +1248,9 @@ function findBankMatch(payment, computedTotal=0) {
       if (byRefAmt) return byRefAmt;
     }
 
-    // 3. Match by company name in description + amount (non-Rely ACH payers)
-    if (!co.includes('rely')) {
-      const byCoAmt = bankTxns.find(t=>Math.abs(t.amount-amt)<0.02&&t.co&&co.includes(t.co.toLowerCase()));
-      if (byCoAmt) { applyRef(byCoAmt); return byCoAmt; }
-    }
+    // 3. Match by company name in description + amount
+    const byCoAmt = bankTxns.find(t=>Math.abs(t.amount-amt)<0.02&&t.co&&co.includes(t.co.toLowerCase()));
+    if (byCoAmt) { applyRef(byCoAmt); return byCoAmt; }
 
     // 4. Amount-only fallback — skip transactions tagged as a different recognized company
     //    to avoid cross-company false matches (e.g. Rely amount matching an All County deposit)
