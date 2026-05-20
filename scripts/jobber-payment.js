@@ -13,7 +13,7 @@ const BATCH_SIZE = 50; // Jobber rejects payment applications with more than 50 
 function buildPaymentUrl({ clientId, invoiceIds }) {
   const u = new URL('/payments/new', JOBBER_ORIGIN);
   u.searchParams.set('clientId', clientId);
-  u.searchParams.set('invoiceId', invoiceIds[0]); // First ID pre-selects on load
+  invoiceIds.forEach(id => u.searchParams.append('invoiceId', id)); // pre-select all
   // DESCENDING puts newest invoices at the top — target invoices are recent so
   // they land at low indices (< 50) instead of deep in the virtual list (200+)
   u.searchParams.set('order', 'DESCENDING');
