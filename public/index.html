@@ -320,7 +320,7 @@ let jobberMap = {};    // subject -> row (for fast lookup)
 let bankTxns = [];
 let payments = [];
 let modalSrc = 'text';
-let mCSV = null, mPDF = null;
+let mCSV = null, mPDF = null, mDate = null;
 
 // ── Utils ─────────────────────────────────────────────────────────────────────
 const fmt = n => n==null||isNaN(n) ? '—' : '$'+Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -656,6 +656,7 @@ function loadMCSV(input) {
       const result=_parseExcelSheet(wb,wb.SheetNames[0]);
       if (result) {
         mCSV=result.remit;
+        if (result.date) mDate=result.date;
         if (!el('m-co').value&&result.co) el('m-co').value=result.co;
         if (result.ref) el('m-ref').value=result.ref;
         if (!el('m-amt').value&&result.amt) el('m-amt').value=result.amt;
@@ -794,8 +795,6 @@ function _parseExcelSheet(wb, sheetName) {
       if (cell == null) return;
       if (String(cell||'').toLowerCase() === 'check') {
         // Scan forward from "Check" for the first integer ≥ 1000 — that's the check number.
-        // Skips date strings ('5/5/2026') and Date objects; works whether "Check" is in the
-        // header row (Old Republic column label) or the Rely title row (standalone keyword).
         if (!ref) {
           for (let ni=idx+1; ni<Math.min(idx+4,row.length); ni++) {
             const nc=row[ni];
@@ -803,8 +802,20 @@ function _parseExcelSheet(wb, sheetName) {
             if (typeof nc==='string' && /^\d{5,}$/.test(nc.trim())) { ref=nc.trim(); break; }
           }
         }
-        if (row === row0raw) {
-          if (row[idx-1]) { const raw=String(row[idx-1]); const mdy=raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/); if (mdy) payDate=`${mdy[3]}-${mdy[1].padStart(2,'0')}-${mdy[2].padStart(2,'0')}`; }
+        // Extract check date from the cell immediately adjacent to "Check" (before or after).
+        // The bank clear date is never adjacent to "Check", so this reliably picks the right date.
+        if (!payDate) {
+          const _tryDate = c => {
+            if (!c) return false;
+            if (c instanceof Date && !isNaN(c.getTime())) {
+              payDate=`${c.getFullYear()}-${String(c.getMonth()+1).padStart(2,'0')}-${String(c.getDate()).padStart(2,'0')}`;
+              return true;
+            }
+            const m=String(c).trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+            if (m) { payDate=`${m[3]}-${m[1].padStart(2,'0')}-${m[2].padStart(2,'0')}`; return true; }
+            return false;
+          };
+          _tryDate(row[idx-1]) || _tryDate(row[idx+1]);
         }
       }
       const cellStr = String(cell);
@@ -1026,14 +1037,14 @@ function pullBankRow(cb, i) {
 function openModal() {
   el('modal').style.display='flex';
   el('m-remit').value=''; el('m-ref').value=''; el('m-amt').value=''; el('m-co').value='';
-  mCSV=null; mPDF=null;
+  mCSV=null; mPDF=null; mDate=null;
 }
 function closeModal() { el('modal').style.display='none'; }
 function closeOut(e) { if(e.target.id==='modal') closeModal(); }
 function addPayment() {
   const co=el('m-co').value, ref=el('m-ref').value.trim(), amt=el('m-amt').value.trim(), remit=getRemit();
   if (!remit&&!co) { alert('Please add a remittance or select a company.'); return; }
-  payments.push({id:uid(), co, ref, amt, remit, src:modalSrc});
+  payments.push({id:uid(), co, ref, amt, remit, src:modalSrc, date:mDate||''});
   renderChips(); closeModal(); checkReady();
 }
 function removePayment(id) { payments=payments.filter(p=>p.id!==id); renderChips(); checkReady(); }
