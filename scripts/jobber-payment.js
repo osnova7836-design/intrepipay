@@ -176,31 +176,6 @@ async function fillTransactionDate(page, date) {
   await page.waitForTimeout(300);
 }
 
-// Click any currently-visible checkboxes for invoices we need.
-// Returns the list of IDs that were found and clicked (or were already checked).
-async function clickVisibleNeeded(page, needed, found) {
-  const remaining = Array.from(needed).filter(id => !found.has(id));
-  if (!remaining.length) return [];
-  const clicked = await page.evaluate((ids) => {
-    const done = [];
-    for (const id of ids) {
-      const link = document.querySelector(`a[href*="/invoices/${id}"]`);
-      if (!link) continue;
-      let el = link.parentElement;
-      for (let k = 0; k < 12; k++) {
-        const cb = el?.querySelector('input[type="checkbox"]');
-        if (cb) { if (!cb.checked) cb.click(); done.push(id); break; }
-        el = el?.parentElement;
-      }
-    }
-    return done;
-  }, remaining);
-  for (const id of clicked) found.add(id);
-  if (clicked.length) {
-    console.log(`  Clicked: ${clicked.join(', ')} (${found.size}/${needed.size} found)`);
-  }
-  return clicked;
-}
 
 // Dumps checkbox indices alongside any discoverable row text — used when DOM
 // search returns -1 so we can understand the page structure.
@@ -247,29 +222,35 @@ async function dumpCheckboxRows(page) {
   console.log('-------------------------------------------\n');
 }
 
-// Scroll the virtual invoice list and click each needed invoice's checkbox as it
-// becomes visible. Jobber only renders a window of rows at a time; scrolling the
-// last visible checkbox into view advances that window. We stop when all invoices
-// are found or the bottom of the list is reached (detected by 3 stalled passes).
+// Scroll through Jobber's virtual invoice list and click each needed invoice's
+// checkbox as it comes into view. All scrolling runs inside a single page.evaluate()
+// call so there is only one CDP round-trip regardless of list length — this avoids
+// the Zone Allocation OOM that occurs when hundreds of evaluate() calls accumulate
+// in Chrome's V8 engine.
 async function ensureInvoicesChecked(page, invoiceIds) {
-  const needed = new Set(invoiceIds.map(String));
-  const found = new Set();
   const paymentUrl = page.url();
 
-  // Pass 0: click anything already visible without scrolling
-  await clickVisibleNeeded(page, needed, found);
-  if (found.size >= needed.size) return;
+  const found = await page.evaluate(async (ids, maxPasses, delayMs) => {
+    const needed = new Set(ids);
+    const done = new Set();
 
-  let lastBottomHref = '';
-  let stallCount = 0;
+    function clickVisible() {
+      for (const id of needed) {
+        if (done.has(id)) continue;
+        const link = document.querySelector(`a[href*="/invoices/${id}"]`);
+        if (!link) continue;
+        let el = link.parentElement;
+        for (let k = 0; k < 12; k++) {
+          const cb = el?.querySelector('input[type="checkbox"]');
+          if (cb) { if (!cb.checked) cb.click(); done.add(id); break; }
+          el = el?.parentElement;
+        }
+      }
+    }
 
-  for (let pass = 0; pass < 400 && found.size < needed.size; pass++) {
-    // Scroll the bottommost visible checkbox into view to advance the virtual list
-    const bottomHref = await page.evaluate(() => {
+    function bottomHref() {
       const cbs = document.querySelectorAll('input[type="checkbox"]');
       if (!cbs.length) return null;
-      cbs[cbs.length - 1].scrollIntoView({ behavior: 'instant', block: 'end' });
-      // Return the bottom invoice href so we can detect when we've stopped moving
       let el = cbs[cbs.length - 1].parentElement;
       for (let i = 0; i < 12; i++) {
         const a = el?.querySelector('a[href*="/invoices/"]');
@@ -277,27 +258,45 @@ async function ensureInvoicesChecked(page, invoiceIds) {
         el = el?.parentElement;
       }
       return null;
-    });
-
-    await page.waitForTimeout(200);
-    await clickVisibleNeeded(page, needed, found);
-
-    if (bottomHref === lastBottomHref) {
-      if (++stallCount >= 3) { console.log('  Reached bottom of invoice list'); break; }
-    } else {
-      stallCount = 0;
-      lastBottomHref = bottomHref || '';
     }
 
-    if (page.url() !== paymentUrl) {
-      console.log('  SPA navigated away — returning to payment page');
-      await page.goto(paymentUrl, { waitUntil: 'load' });
-      await page.waitForSelector('select, input[type="text"]', { timeout: 30000 });
-      await page.waitForTimeout(1000);
+    // Pass 0: click anything already in view
+    clickVisible();
+    if (done.size >= needed.size) return Array.from(done);
+
+    let lastHref = '';
+    let stall = 0;
+
+    for (let pass = 0; pass < maxPasses && done.size < needed.size; pass++) {
+      const cbs = document.querySelectorAll('input[type="checkbox"]');
+      if (!cbs.length) break;
+      cbs[cbs.length - 1].scrollIntoView({ behavior: 'instant', block: 'end' });
+
+      await new Promise(r => setTimeout(r, delayMs));
+      clickVisible();
+
+      const h = bottomHref();
+      if (h === lastHref) { if (++stall >= 3) break; }
+      else { stall = 0; lastHref = h || ''; }
     }
+
+    return Array.from(done);
+  }, invoiceIds.map(String), 150, 200).catch(err => {
+    // Navigation mid-evaluate throws; treat as empty and let the SPA-check below handle it
+    console.log(`  evaluate interrupted (${err.message.slice(0, 60)}) — will retry after navigation`);
+    return [];
+  });
+
+  if (page.url() !== paymentUrl) {
+    console.log('  SPA navigated away — returning to payment page');
+    await page.goto(paymentUrl, { waitUntil: 'load' });
+    await page.waitForSelector('select, input[type="text"]', { timeout: 30000 });
+    await page.waitForTimeout(1000);
   }
 
-  const missing = invoiceIds.filter(id => !found.has(String(id)));
+  console.log(`  Found ${found.length}/${invoiceIds.length} invoices: ${found.join(', ')}`);
+
+  const missing = invoiceIds.map(String).filter(id => !found.includes(id));
   if (missing.length > 0) {
     console.log(`\n  Could not find: ${missing.join(', ')} — dumping visible rows:`);
     await dumpCheckboxRows(page);
