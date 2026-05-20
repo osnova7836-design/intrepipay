@@ -657,7 +657,7 @@ function loadMCSV(input) {
       if (result) {
         mCSV=result.remit;
         if (!el('m-co').value&&result.co) el('m-co').value=result.co;
-        if (!el('m-ref').value&&result.ref) el('m-ref').value=result.ref;
+        if (result.ref) el('m-ref').value=result.ref;
         if (!el('m-amt').value&&result.amt) el('m-amt').value=result.amt;
       } else {
         // Fallback: raw tab-separated CSV text
@@ -782,7 +782,7 @@ function _parseExcelSheet(wb, sheetName) {
   console.log('[_parseExcelSheet]', sheetName, '→ co:', co, '| headerRow:', headerRowIdx, '| cols:', row0.filter(c=>c).join(' | '));
 
   // Extract check number, total, and date
-  let ref = '', amt = '', payDate = '';
+  let ref = '', amt = '', payDate = '', refIsSheetName = false;
   rows.forEach(row => {
     if (!row) return;
     const isCheckRow = row.some(cell => {
@@ -792,14 +792,30 @@ function _parseExcelSheet(wb, sheetName) {
     if (!isCheckRow && row !== row0raw) return;
     row.forEach((cell, idx) => {
       if (cell == null) return;
-      if (String(cell||'').toLowerCase() === 'check' && row === row0raw) {
-        if (row[idx-1]) { const raw = String(row[idx-1]); const mdy = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/); if (mdy) payDate = `${mdy[3]}-${mdy[1].padStart(2,'0')}-${mdy[2].padStart(2,'0')}`; }
-        if (row[idx+1]) ref = String(row[idx+1]);
-        if (row[idx+2]) amt = '$' + Number(row[idx+2]).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+      if (String(cell||'').toLowerCase() === 'check') {
+        // Scan forward from "Check" for the first integer ≥ 1000 — that's the check number.
+        // Skips date strings ('5/5/2026') and Date objects; works whether "Check" is in the
+        // header row (Old Republic column label) or the Rely title row (standalone keyword).
+        if (!ref) {
+          for (let ni=idx+1; ni<Math.min(idx+4,row.length); ni++) {
+            const nc=row[ni];
+            if (typeof nc==='number' && Number.isInteger(nc) && nc>=1000) { ref=String(nc); break; }
+            if (typeof nc==='string' && /^\d{5,}$/.test(nc.trim())) { ref=nc.trim(); break; }
+          }
+        }
+        if (row === row0raw) {
+          if (row[idx-1]) { const raw=String(row[idx-1]); const mdy=raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/); if (mdy) payDate=`${mdy[3]}-${mdy[1].padStart(2,'0')}-${mdy[2].padStart(2,'0')}`; }
+        }
       }
       const cellStr = String(cell);
-      const lessenCheck = cellStr.match(/Check\s*#[:\s]+#?(\w+)/i);
+      // Match "Check #12345", "Check # 12345", "Check #: 12345", "Check Number: 12345"
+      const lessenCheck = cellStr.match(/Check\s*(?:#|No\.?|Number)\s*:?\s*#?\s*(\d+)/i);
       if (lessenCheck && !ref) ref = lessenCheck[1];
+      // Also handle label in one cell ("Check #") with number in the next cell
+      if (!ref && /Check\s*(?:#|No\.?|Number)/i.test(cellStr) && row[idx+1] != null) {
+        const nextVal = String(row[idx+1]).trim();
+        if (/^\d+$/.test(nextVal)) ref = nextVal;
+      }
       const lessenAmt = cellStr.match(/\$\s*([\d,]+\.\d{2})/);
       if (lessenAmt && !amt) amt = '$' + lessenAmt[1].replace(/,/g,'');
       if (typeof cell === 'number' && cell > 0 && !amt) amt = '$' + cell.toFixed(2);
@@ -877,22 +893,33 @@ function _parseExcelSheet(wb, sheetName) {
     });
     if (!ref) ref=sheetName;
   } else {
-    // Generic / Rely / 2-10 format: find header row (contains "Claim"), then col 0 = claim, col 1 = amount
+    // Generic / Rely / 2-10 format: find header row (contains "Claim"), detect claim and amount columns
     let headerIdx = -1;
     rows.forEach((row,i) => { if (row.some(c=>String(c||'').toLowerCase().includes('claim'))) headerIdx=i; });
+    const hdrRow = headerIdx >= 0 ? rows[headerIdx].map(c=>String(c||'').toLowerCase()) : null;
+    const claimCol = hdrRow ? (hdrRow.findIndex(c=>c.includes('claim')) >= 0 ? hdrRow.findIndex(c=>c.includes('claim')) : 0) : 0;
+    const amtCol   = hdrRow ? (hdrRow.findIndex(c=>c.includes('amount')||c.includes('paid')||c.includes('net')) > claimCol ? hdrRow.findIndex(c=>c.includes('amount')||c.includes('paid')||c.includes('net')) : claimCol+1) : 1;
     const dataRows = headerIdx>=0 ? rows.slice(headerIdx+1) : rows.slice(2);
     dataRows.forEach(row => {
-      const claim=row[0]; const rawAmt=row[1];
+      const claim=row[claimCol]; const rawAmt=row[amtCol];
       if (!claim||rawAmt==null) return;
       const amtStr=String(rawAmt).replace(/[$,\s]/g,'').replace(/^-\$/,'-');
       const amount=parseFloat(amtStr);
       if (!isNaN(Number(claim))&&!isNaN(amount)&&amount!==0) remitLines.push(claim+'\t'+amount);
     });
+    // Always compute total from claim lines — the title-row check number (e.g. 2707226) is a
+    // large integer that the generic numeric-cell check can mistake for an amount.
+    if (remitLines.length > 1) {
+      const total = remitLines.slice(1).reduce((s,l)=>s+(parseFloat(l.split('\t')[1])||0),0);
+      if (total > 0) amt = '$' + total.toFixed(2);
+    }
+    console.log('[Rely/2-10]', sheetName, '→ co:', co, '| lines:', remitLines.length-1, '| amt:', amt);
+    // Leave ref blank — applyRef in findBankMatch will set the real bank ACH ID from the description
   }
 
-  if (!ref) ref = sheetName;
+  if (!ref) { ref = sheetName; refIsSheetName = true; }
   if (remitLines.length <= 1) return null; // no data rows
-  return {co, ref, amt, date: payDate, remit: remitLines.join('\n')};
+  return {co, ref: refIsSheetName ? '' : ref, amt, date: payDate, remit: remitLines.join('\n')};
 }
 
 // ── Multi-tab Excel upload ────────────────────────────────────────────────────

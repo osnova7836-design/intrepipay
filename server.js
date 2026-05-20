@@ -157,10 +157,8 @@ app.get('/api/invoices', async (req, res) => {
     let pageCount = 0;
     let stopFetching = false;
 
-    while (hasNextPage && pageCount < 20 && !stopFetching) {
-      const afterClause = cursor
-        ? `(first: 250, after: "${cursor}", filter: { createdAt: { after: "2025-12-31T23:59:59Z" } })`
-        : `(first: 250, filter: { createdAt: { after: "2025-12-31T23:59:59Z" } })`;
+    while (hasNextPage && pageCount < 50 && !stopFetching) {
+      const afterClause = cursor ? `(first: 250, after: "${cursor}")` : `(first: 250)`;
       const query = `{
         invoices${afterClause} {
           nodes {
@@ -217,7 +215,7 @@ app.get('/api/invoices', async (req, res) => {
       }
 
       const page = data.data.invoices;
-      allInvoices = allInvoices.concat(page.nodes);
+      allInvoices.push(...page.nodes);
       hasNextPage = page.pageInfo.hasNextPage;
       cursor = page.pageInfo.endCursor;
       pageCount++;
@@ -227,7 +225,7 @@ app.get('/api/invoices', async (req, res) => {
 
       if (hasNextPage && !stopFetching) await new Promise(r => setTimeout(r, 1000));
 
-      console.log(`Page ${pageCount}: ${page.nodes.length} invoices, hasNextPage: ${hasNextPage}, total: ${allInvoices.length}`);
+      console.log(`Page ${pageCount}: ${page.nodes.length} invoices, hasNextPage: ${hasNextPage}, total: ${allInvoices.length}, lastInv#: ${lastInv?.invoiceNumber}`);
     }
 
     console.log(`Done. Total invoices fetched: ${allInvoices.length}`);
