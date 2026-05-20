@@ -176,6 +176,59 @@ async function fillTransactionDate(page, date) {
   await page.waitForTimeout(300);
 }
 
+// Each invoice row has an <a href="/invoices/INVOICE_DB_ID"> link.
+// We find the row by that link, then return its checkbox's position in the list.
+// Jobber uses a virtual scroller so rows beyond the initial viewport aren't
+// rendered until scrolled into view — strategy 2 handles that case.
+async function findCheckboxIndexByDom(page, invoiceId) {
+  const searchByHref = (id) => {
+    const allCbs = Array.from(document.querySelectorAll('input[type="checkbox"]'));
+    const link = document.querySelector(`a[href*="/invoices/${id}"]`);
+    if (!link) return -1;
+    let el = link;
+    for (let i = 0; i < 10; i++) {
+      const cb = el.querySelector('input[type="checkbox"]');
+      if (cb) return allCbs.indexOf(cb);
+      if (!el.parentElement) break;
+      el = el.parentElement;
+    }
+    return -1;
+  };
+
+  // Strategy 1: row already rendered (visible rows)
+  let idx = await page.evaluate(searchByHref, String(invoiceId));
+  if (idx !== -1) return idx;
+
+  // Strategy 2: scroll only the last row to trigger load-on-demand in batches.
+  // Scrolling every row causes Jobber's SPA to navigate away at ~200 rows.
+  console.log(`    (scrolling to load all rows for invoice ${invoiceId}...)`);
+  let prevCount = 0;
+  for (let pass = 0; pass < 20; pass++) {
+    const count = await page.evaluate(() =>
+      document.querySelectorAll('input[type="checkbox"]').length
+    );
+    if (count === prevCount) break;  // list fully loaded — invoice genuinely not present
+    console.log(`    (${count} rows loaded — scrolling last into view...)`);
+    prevCount = count;
+
+    // Scroll only the last row to trigger the next batch without loading all rows at once.
+    await page.evaluate(() => {
+      const cbs = document.querySelectorAll('input[type="checkbox"]');
+      cbs[cbs.length - 1].scrollIntoView({ behavior: 'instant', block: 'nearest' });
+    });
+    // Wait until new rows appear OR give up after 3 seconds.
+    await page.waitForFunction(
+      (prev) => document.querySelectorAll('input[type="checkbox"]').length > prev,
+      prevCount,
+      { timeout: 3000 }
+    ).catch(() => {});
+
+    const found = await page.evaluate(searchByHref, String(invoiceId));
+    if (found !== -1) return found;
+  }
+
+  return -1;
+}
 
 // Dumps checkbox indices alongside any discoverable row text — used when DOM
 // search returns -1 so we can understand the page structure.
@@ -222,85 +275,69 @@ async function dumpCheckboxRows(page) {
   console.log('-------------------------------------------\n');
 }
 
-// Scroll through Jobber's virtual invoice list and click each needed invoice's
-// checkbox as it comes into view. All scrolling runs inside a single page.evaluate()
-// call so there is only one CDP round-trip regardless of list length — this avoids
-// the Zone Allocation OOM that occurs when hundreds of evaluate() calls accumulate
-// in Chrome's V8 engine.
 async function ensureInvoicesChecked(page, invoiceIds) {
-  const paymentUrl = page.url();
+  const indices = {};
 
-  const found = await page.evaluate(async (ids, maxPasses, delayMs) => {
-    const needed = new Set(ids);
-    const done = new Set();
-
-    function clickVisible() {
-      for (const id of needed) {
-        if (done.has(id)) continue;
-        const link = document.querySelector(`a[href*="/invoices/${id}"]`);
-        if (!link) continue;
-        let el = link.parentElement;
-        for (let k = 0; k < 12; k++) {
-          const cb = el?.querySelector('input[type="checkbox"]');
-          if (cb) { if (!cb.checked) cb.click(); done.add(id); break; }
-          el = el?.parentElement;
-        }
-      }
+  for (const id of invoiceIds) {
+    console.log(`  Searching DOM for invoice ${id}...`);
+    const idx = await findCheckboxIndexByDom(page, id);
+    if (idx !== -1) {
+      console.log(`  Invoice ${id} → index ${idx} (found in DOM)`);
+      indices[id] = idx;
+    } else {
+      console.log(`  Invoice ${id} → NOT found by DOM/href search`);
     }
-
-    function bottomHref() {
-      const cbs = document.querySelectorAll('input[type="checkbox"]');
-      if (!cbs.length) return null;
-      let el = cbs[cbs.length - 1].parentElement;
-      for (let i = 0; i < 12; i++) {
-        const a = el?.querySelector('a[href*="/invoices/"]');
-        if (a) return a.getAttribute('href');
-        el = el?.parentElement;
-      }
-      return null;
-    }
-
-    // Pass 0: click anything already in view
-    clickVisible();
-    if (done.size >= needed.size) return Array.from(done);
-
-    let lastHref = '';
-    let stall = 0;
-
-    for (let pass = 0; pass < maxPasses && done.size < needed.size; pass++) {
-      const cbs = document.querySelectorAll('input[type="checkbox"]');
-      if (!cbs.length) break;
-      cbs[cbs.length - 1].scrollIntoView({ behavior: 'instant', block: 'end' });
-
-      await new Promise(r => setTimeout(r, delayMs));
-      clickVisible();
-
-      const h = bottomHref();
-      if (h === lastHref) { if (++stall >= 3) break; }
-      else { stall = 0; lastHref = h || ''; }
-    }
-
-    return Array.from(done);
-  }, invoiceIds.map(String), 150, 200).catch(err => {
-    // Navigation mid-evaluate throws; treat as empty and let the SPA-check below handle it
-    console.log(`  evaluate interrupted (${err.message.slice(0, 60)}) — will retry after navigation`);
-    return [];
-  });
-
-  if (page.url() !== paymentUrl) {
-    console.log('  SPA navigated away — returning to payment page');
-    await page.goto(paymentUrl, { waitUntil: 'load' });
-    await page.waitForSelector('select, input[type="text"]', { timeout: 30000 });
-    await page.waitForTimeout(1000);
   }
 
-  console.log(`  Found ${found.length}/${invoiceIds.length} invoices: ${found.join(', ')}`);
+  const notFound = invoiceIds.filter((id) => indices[id] === undefined);
+  if (notFound.length > 0) {
+    // Count checked checkboxes and match them to our list in order.
+    const checkedIndices = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('input[type="checkbox"]'))
+        .map((cb, i) => ({ i, checked: cb.checked }))
+        .filter((r) => r.checked)
+        .map((r) => r.i)
+    );
+    console.log(`  Pre-checked checkbox indices: ${checkedIndices.join(', ')}`);
 
-  const missing = invoiceIds.map(String).filter(id => !found.includes(id));
-  if (missing.length > 0) {
-    console.log(`\n  Could not find: ${missing.join(', ')} — dumping visible rows:`);
-    await dumpCheckboxRows(page);
-    throw new Error(`Could not identify checkboxes for: ${missing.join(', ')}`);
+    if (checkedIndices.length === invoiceIds.length) {
+      console.log('  Count matches — using pre-selected indices.');
+      invoiceIds.forEach((id, i) => { indices[id] = checkedIndices[i]; });
+    } else {
+      console.log(`\n  DOM search missed: ${notFound.join(', ')}. Dumping rows for manual inspection:`);
+      await dumpCheckboxRows(page);
+      throw new Error(
+        `Could not identify checkboxes for: ${notFound.join(', ')}.\n` +
+        'See row dump above — match invoice numbers to database IDs.'
+      );
+    }
+  }
+
+  const paymentUrl = page.url();
+
+  for (const [id, idx] of Object.entries(indices)) {
+    const cb = page.locator('input[type="checkbox"]').nth(Number(idx));
+    if (await cb.isChecked().catch(() => false)) {
+      console.log(`  Invoice ${id} (index ${idx}) already checked`);
+      continue;
+    }
+
+    // Use JS dispatch to avoid Playwright waiting for a navigation that may not settle.
+    await page.evaluate((i) => {
+      const cb = document.querySelectorAll('input[type="checkbox"]')[i];
+      if (cb && !cb.checked) cb.click();
+    }, Number(idx));
+    await page.waitForTimeout(400);
+
+    // If Jobber's SPA navigated away (known issue at deep indices), go back and verify.
+    if (page.url() !== paymentUrl) {
+      console.log(`  ⚠ SPA navigated away after checkbox ${idx} — returning to payment page`);
+      await page.goto(paymentUrl, { waitUntil: 'load' });
+      await page.waitForSelector('select, input[type="text"]', { timeout: 30000 });
+      await page.waitForTimeout(1000);
+    }
+
+    console.log(`  Invoice ${id} (index ${idx}) clicked`);
   }
 }
 
