@@ -1574,7 +1574,7 @@ function renderReport(results) {
                 <td class="amt" style="text-align:right">${fmt(i.remittance_amount)}</td>
                 <td class="amt" style="text-align:right">${i.jobber_amount?fmt(i.jobber_amount):'—'}</td>
                 <td class="amt" style="text-align:right;color:${Math.abs(diff)>0.01?'var(--amber)':'var(--text-muted)'}">${Math.abs(diff)>0.01?fmt(Math.abs(diff)):'—'}</td>
-                <td style="display:flex;align-items:center;gap:6px">${matchBadge}${i.jobber_invoice&&i.status==='match'?`<button class="btn-apply btn-apply-one" onclick="applyOne('${i.jobber_invoice}','${i.remittance_amount}','${(r.ref||'').replace(/'/g,'')}',this)" ${isBlocked(r)?'disabled':''}>Apply</button>`:''}</td>
+                <td style="display:flex;align-items:center;gap:6px">${matchBadge}${i.jobber_invoice&&i.status==='match'?`<input type="number" step="0.01" id="amo-${i.jobber_invoice}" value="${Math.abs(i.remittance_amount).toFixed(2)}" data-default="${Math.abs(i.remittance_amount).toFixed(2)}" oninput="this.style.borderColor=parseFloat(this.value).toFixed(2)!==this.dataset.default?'var(--amber)':'var(--border)'" style="width:72px;background:var(--surface);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:'IBM Plex Mono',monospace;font-size:11px;padding:3px 5px;text-align:right"><button class="btn-apply btn-apply-one" onclick="applyOne('${i.jobber_invoice}',null,'${(r.ref||'').replace(/'/g,'')}',this)" ${isBlocked(r)?'disabled':''}>Apply</button>`:''}</td>
               </tr>`;
             }).join('')}
             <tr class="tr-total">
@@ -2175,7 +2175,7 @@ function confirmPaymentDate(paymentDate, count, onConfirm, skipNote = '') {
   };
 }
 
-async function applyOne(invoiceNumber, amount, ref, btn) {
+async function applyOne(invoiceNumber, _unused, ref, btn) {
   const block = btn.closest('.pblock');
   const dateInput = block.querySelector('input[type=date]');
   const paymentDate = (dateInput && dateInput.value) ? dateInput.value : todayISO();
@@ -2188,10 +2188,38 @@ async function applyOne(invoiceNumber, amount, ref, btn) {
     return;
   }
 
-  confirmPaymentDate(paymentDate, 1, date => {
-    const params = new URLSearchParams({ clientId: row.clientDbId, invoiceIds: row.jobberDbId, type: payType, ref: ref || '', date });
-    streamPayment(params, btn, [invoiceNumber]);
-  });
+  const amtInput = document.getElementById(`amo-${invoiceNumber}`);
+  const overrideAmt = amtInput ? parseFloat(amtInput.value) : null;
+  const isOverride = amtInput && amtInput.value && parseFloat(amtInput.value).toFixed(2) !== amtInput.dataset.default;
+
+  if (isOverride && overrideAmt > 0) {
+    confirmPaymentDate(paymentDate, 1, async date => {
+      btn.disabled = true; btn.textContent = '⟳';
+      try {
+        const resp = await fetch('/api/apply-payment', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ invoiceNumber, amount: overrideAmt, paymentRef: ref || '', paymentDate: date })
+        });
+        const data = await resp.json();
+        if (data.success) {
+          btn.textContent = '✓ Applied';
+          markInvoicesPaid([invoiceNumber]);
+        } else {
+          btn.disabled = false; btn.textContent = 'Apply';
+          alert('Error: ' + (data.error?.map ? data.error.map(e=>e.message).join(', ') : data.error));
+        }
+      } catch(e) {
+        btn.disabled = false; btn.textContent = 'Apply';
+        alert('Error: ' + e.message);
+      }
+    });
+  } else {
+    confirmPaymentDate(paymentDate, 1, date => {
+      const params = new URLSearchParams({ clientId: row.clientDbId, invoiceIds: row.jobberDbId, type: payType, ref: ref || '', date });
+      streamPayment(params, btn, [invoiceNumber]);
+    });
+  }
 }
 
 async function applyAll(ref, co, btn) {
