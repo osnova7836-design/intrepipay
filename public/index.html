@@ -269,6 +269,7 @@ tr:hover td{background:var(--surface2)}
         <option value="">— select —</option>
         <option>First American / FALCON</option>
         <option>Rely Home Warranty</option>
+        <option>2-10 Home Buyers Warranty</option>
         <option>Lessen</option>
         <option>Cinch Home Services</option>
         <option>Frontdoor</option>
@@ -623,6 +624,8 @@ function getBankCo(desc) {
   if (d.includes('RHEEM')) return 'Rheem';
   if (d.includes('FRONTDOOR')) return 'Frontdoor';
   if (d.includes('CINCH')) return 'Cinch';
+  if (d.includes('2-10')||d.includes('HOME BUYER')) return '2-10';
+  if (d.includes('OLD REPUBLIC')||d.includes('OLDREPUBLIC')) return 'Old Republic';
   if (d.includes('RELY')) return 'Rely';
   if (d.includes('ALLCOUNTY')||d.includes('PL*ALLCOUNTY')) return 'All County';
   return null;
@@ -649,10 +652,18 @@ function loadMCSV(input) {
   } else {
     const rd=new FileReader();
     rd.onload=e=>{
-      const wb=XLSX.read(e.target.result,{type:'array'});
-      mCSV=XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]]);
-      // Excel: row 0 is the first CSV line — scan it for Lessen check summary
-      _mCSVAutoFill(mCSV.split('\n')[0]||'');
+      const wb=XLSX.read(e.target.result,{type:'array',cellDates:true});
+      const result=_parseExcelSheet(wb,wb.SheetNames[0]);
+      if (result) {
+        mCSV=result.remit;
+        if (!el('m-co').value&&result.co) el('m-co').value=result.co;
+        if (!el('m-ref').value&&result.ref) el('m-ref').value=result.ref;
+        if (!el('m-amt').value&&result.amt) el('m-amt').value=result.amt;
+      } else {
+        // Fallback: raw tab-separated CSV text
+        mCSV=XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]],{FS:'\t'});
+        _mCSVAutoFill(mCSV.split('\n')[0]||'');
+      }
     };
     rd.readAsArrayBuffer(file);
   }
@@ -697,7 +708,11 @@ async function loadMPDF(input) {
       else if (/Dispatch\s*(?:ID|#)/i.test(mPDF))      el('m-co').value = 'Frontdoor';
       else if (/\bSCCV[A-Z0-9]+-\d+\b/i.test(mPDF))   el('m-co').value = 'Cinch Home Services';
       else if (/\bFALCON\b/i.test(mPDF))               el('m-co').value = 'First American / FALCON';
+      else if (/2[-.]10\b|home\s*buyer/i.test(mPDF))    el('m-co').value = '2-10 Home Buyers Warranty';
       else if (/\bClaim\s*#/i.test(mPDF))              el('m-co').value = 'Rely Home Warranty';
+      else if (/work\s*order/i.test(mPDF) && /\b\d{4}-\d{4}\b/.test(mPDF)) el('m-co').value = 'Old Republic';
+      else if (/\bB\d{7,10}\b/.test(mPDF))              el('m-co').value = 'Lessen';
+      else if (/\b260\d{7,8}\b/.test(mPDF))             el('m-co').value = 'Rheem';
     }
     // Auto-fill amount and ref/date from PDF if fields are still empty
     if (!el('m-amt').value) {
@@ -713,6 +728,15 @@ async function loadMPDF(input) {
       const eftpyM = mPDF.match(/\bEFTPY(\d+)\b/i);
       if (eftpyM) el('m-ref').value = 'EFTPY' + eftpyM[1];
     }
+    // Old Republic: Check # appears on first data row (NNNN-NNNN line)
+    if (!el('m-ref').value && /work\s*order/i.test(mPDF) && /\b\d{4}-\d{4}\b/.test(mPDF)) {
+      for (const line of mPDF.split(/\n|\r/)) {
+        if (/\d{4}-\d{4}/.test(line)) {
+          const m = line.match(/\b(\d{7})\b/);
+          if (m) { el('m-ref').value = 'Check #' + m[1]; break; }
+        }
+      }
+    }
     if (!el('m-ref').value) {
       const refM = mPDF.match(/\bCheck\s*#\s*[:\-]?\s*([A-Z0-9\-]{3,20})/i)
                 || mPDF.match(/\bPayment\s*(?:ID|#)\s*[:\-]?\s*([A-Z0-9\-]{3,20})/i)
@@ -723,6 +747,152 @@ async function loadMPDF(input) {
     // ePay means no real check number — clear it so the user can enter the bank reference manually
     if (/^epay$/i.test(el('m-ref').value)) el('m-ref').value = '';
   } catch(e) { el('mp-title').textContent='⚠ Could not read — try pasting'; }
+}
+
+// ── Shared Excel sheet parser (used by loadMultiTab and loadMCSV) ─────────────
+function _parseExcelSheet(wb, sheetName) {
+  const ws = wb.Sheets[sheetName];
+  const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:null, raw:true});
+  if (!rows || rows.length < 2) return null;
+
+  // Find the actual header row — some files have a blank/title row above the column headers
+  let headerRowIdx = 0;
+  for (let ri = 1; ri < Math.min(5, rows.length); ri++) {
+    const rc = rows[ri].map(c=>String(c||'').toLowerCase());
+    if (rc.some(c=>c.includes('work order')||c==='wo #'||c==='wo#'||c.includes('invoice #')||c.includes('claim')||c==='check')) {
+      headerRowIdx = ri; break;
+    }
+  }
+  const row0raw = rows[headerRowIdx];
+  const row0 = row0raw.map(c=>String(c||'').toLowerCase());
+
+  // Detect company from header row content
+  let co = 'Rely Home Warranty';
+  if (row0.some(c=>c.includes('2-10')||c.includes('home buyer')) || sheetName.toLowerCase().includes('2-10')) co = '2-10 Home Buyers Warranty';
+  else if (row0.some(c=>c.includes('rely'))) co = 'Rely Home Warranty';
+  else if (row0.some(c=>c.includes('first american')||c.includes('falcon'))) co = 'First American / FALCON';
+  else if (row0.some(c=>c.includes('lessen'))) co = 'Lessen';
+  else if (row0.some(c=>c.includes('cinch'))) co = 'Cinch Home Services';
+  else if (row0.some(c=>c.includes('frontdoor'))) co = 'Frontdoor';
+  else if (row0.some(c=>c.includes('rheem'))) co = 'Rheem';
+  else if (row0.some(c=>c.includes('work order')) && row0.some(c=>c.includes('check'))) co = 'Old Republic';
+  else if (row0.some(c=>c==='wo #'||c==='wo#') && row0.some(c=>c==='invoice #'||c==='invoice#')) co = 'Lessen';
+  else if (row0.some(c=>c.includes('payment method')) && row0.some(c=>c.includes('payment total'))) co = 'Cinch Home Services';
+
+  console.log('[_parseExcelSheet]', sheetName, '→ co:', co, '| headerRow:', headerRowIdx, '| cols:', row0.filter(c=>c).join(' | '));
+
+  // Extract check number, total, and date
+  let ref = '', amt = '', payDate = '';
+  rows.forEach(row => {
+    if (!row) return;
+    const isCheckRow = row.some(cell => {
+      const s = String(cell||'');
+      return s.toLowerCase() === 'check' || /Check\s*#/i.test(s);
+    });
+    if (!isCheckRow && row !== row0raw) return;
+    row.forEach((cell, idx) => {
+      if (cell == null) return;
+      if (String(cell||'').toLowerCase() === 'check' && row === row0raw) {
+        if (row[idx-1]) { const raw = String(row[idx-1]); const mdy = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/); if (mdy) payDate = `${mdy[3]}-${mdy[1].padStart(2,'0')}-${mdy[2].padStart(2,'0')}`; }
+        if (row[idx+1]) ref = String(row[idx+1]);
+        if (row[idx+2]) amt = '$' + Number(row[idx+2]).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+      }
+      const cellStr = String(cell);
+      const lessenCheck = cellStr.match(/Check\s*#[:\s]+#?(\w+)/i);
+      if (lessenCheck && !ref) ref = lessenCheck[1];
+      const lessenAmt = cellStr.match(/\$\s*([\d,]+\.\d{2})/);
+      if (lessenAmt && !amt) amt = '$' + lessenAmt[1].replace(/,/g,'');
+      if (typeof cell === 'number' && cell > 0 && !amt) amt = '$' + cell.toFixed(2);
+      const lessenDate = cellStr.match(/(\d{1,2}\/\d{1,2}\/\d{4})/);
+      if (lessenDate && !payDate) { const mdy = lessenDate[1].match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/); payDate = mdy ? `${mdy[3]}-${mdy[1].padStart(2,'0')}-${mdy[2].padStart(2,'0')}` : lessenDate[1]; }
+      if (cell instanceof Date && !isNaN(cell.getTime()) && !payDate) payDate = `${cell.getFullYear()}-${String(cell.getMonth()+1).padStart(2,'0')}-${String(cell.getDate()).padStart(2,'0')}`;
+    });
+  });
+
+  const remitLines = ['Claim #\tAmount'];
+
+  if (co === 'Lessen') {
+    const woCol = row0.findIndex(c=>c==='wo #'||c==='wo#');
+    const amtCol = row0.findIndex(c=>c==='amount');
+    rows.slice(headerRowIdx + 1).forEach(row => {
+      const wo = String(row[woCol >= 0 ? woCol : 1]||'').trim();
+      const rawAmt = row[amtCol >= 0 ? amtCol : 2];
+      if (!wo || rawAmt == null) return;
+      const amount = parseFloat(String(rawAmt).replace(/[$,\s]/g,''));
+      if (/^B\d{7,10}$/.test(wo) && !isNaN(amount) && amount !== 0) remitLines.push(wo + '\t' + amount.toFixed(2));
+    });
+    if (!amt && remitLines.length > 1) { const total = remitLines.slice(1).reduce((s,l)=>s+(parseFloat(l.split('\t')[1])||0),0); if (total>0) amt='$'+total.toFixed(2); }
+    console.log('[Lessen]', sheetName, '→ ref:', ref, '| amt:', amt, '| payDate:', payDate, '| lines:', remitLines.length-1);
+  } else if (co === 'Cinch Home Services') {
+    const woCol     = row0.findIndex(c=>c.includes('work order')||c==='wo#'||c==='wo #');
+    const methodCol = row0.findIndex(c=>c.includes('payment method'));
+    const amtCol    = row0.findIndex(c=>c.includes('payment total')||c.includes('payment amount'));
+    const dateCol   = row0.findIndex(c=>c==='date');
+    const numCol    = row0.findIndex(c=>c.includes('payment number'));
+    const payCol    = row0.findIndex(c=>c.trim()==='payment');
+    let runningTotal = 0, debuggedFirst = false;
+    rows.slice(headerRowIdx + 1).forEach(row => {
+      if (!ref && numCol >= 0 && row[numCol]) ref = String(row[numCol]);
+      if (!amt && amtCol >= 0 && row[amtCol] != null) { const chipAmt=parseFloat(String(row[amtCol]).replace(/[^0-9.]/g,'')); if (!isNaN(chipAmt)&&chipAmt>0) amt='$'+chipAmt.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+      if (!payDate && dateCol >= 0 && row[dateCol] != null) {
+        const dc = row[dateCol];
+        if (dc instanceof Date && !isNaN(dc.getTime())) payDate=`${dc.getFullYear()}-${String(dc.getMonth()+1).padStart(2,'0')}-${String(dc.getDate()).padStart(2,'0')}`;
+        else { const raw=String(dc); const iso=raw.match(/^(\d{4})-(\d{2})-(\d{2})$/); const mdy=raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/); payDate=iso?raw:mdy?`${mdy[3]}-${mdy[1].padStart(2,'0')}-${mdy[2].padStart(2,'0')}`:raw; }
+      }
+      let sccRef=null, sccCellIdx=-1;
+      for (let ci=0;ci<row.length;ci++) { const m=String(row[ci]||'').match(/\b(SCCV[A-Z0-9]+-\d+)\b/i); if (m){sccRef=m[1];sccCellIdx=ci;break;} }
+      if (!debuggedFirst) { debuggedFirst=true; console.log('[Cinch first row]', sheetName, row.map((c,i)=>`[${i}:${row0[i]}]=${c}`).join(' ')); }
+      if (!sccRef) return;
+      let rawAmt;
+      if (payCol>=0&&row[payCol]!=null) rawAmt=row[payCol];
+      else if (sccCellIdx>=0&&row[sccCellIdx+1]!=null) rawAmt=row[sccCellIdx+1];
+      else rawAmt=amtCol>=0?row[amtCol]:row[1];
+      if (rawAmt==null) return;
+      const amount=parseFloat(String(rawAmt).replace(/[^0-9.]/g,''));
+      if (isNaN(amount)||amount===0) return;
+      remitLines.push(sccRef+'\t'+amount.toFixed(2)); runningTotal+=amount;
+    });
+    if (!amt&&runningTotal>0) amt='$'+runningTotal.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+    if (!ref) ref=sheetName;
+  } else if (co === 'Old Republic') {
+    const woCol    = row0.findIndex(c=>c.includes('work order'));
+    const amtCol   = row0.findIndex(c=>c==='amount');
+    const checkCol = row0.findIndex(c=>c.includes('check'));
+    const dateCol  = row0.findIndex(c=>c==='date');
+    const totalCol = row0.findIndex(c=>c==='total');
+    rows.slice(headerRowIdx + 1).forEach(row => {
+      const wo = String(row[woCol>=0?woCol:0]||'').trim();
+      if (!/^\d{4}-\d{4}$/.test(wo)) return;
+      if (!ref && checkCol>=0 && row[checkCol]) ref='Check #'+String(row[checkCol]);
+      if (!amt && totalCol>=0 && row[totalCol]!=null) { const total=parseFloat(String(row[totalCol]).replace(/[$,]/g,'')); if (!isNaN(total)&&total>0) amt='$'+total.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+      if (!payDate && dateCol>=0 && row[dateCol]!=null) {
+        const dc=row[dateCol];
+        if (dc instanceof Date && !isNaN(dc.getTime())) payDate=`${dc.getFullYear()}-${String(dc.getMonth()+1).padStart(2,'0')}-${String(dc.getDate()).padStart(2,'0')}`;
+        else { const raw=String(dc); const mdy=raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/); if (mdy) payDate=`${mdy[3]}-${mdy[1].padStart(2,'0')}-${mdy[2].padStart(2,'0')}`; else if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) payDate=raw; }
+      }
+      const rawAmt=row[amtCol>=0?amtCol:1];
+      const amount=parseFloat(String(rawAmt||'').replace(/[$,]/g,''));
+      if (isNaN(amount)||amount<=0) return;
+      remitLines.push(wo+'\t'+amount.toFixed(2));
+    });
+    if (!ref) ref=sheetName;
+  } else {
+    // Generic / Rely / 2-10 format: find header row (contains "Claim"), then col 0 = claim, col 1 = amount
+    let headerIdx = -1;
+    rows.forEach((row,i) => { if (row.some(c=>String(c||'').toLowerCase().includes('claim'))) headerIdx=i; });
+    const dataRows = headerIdx>=0 ? rows.slice(headerIdx+1) : rows.slice(2);
+    dataRows.forEach(row => {
+      const claim=row[0]; const rawAmt=row[1];
+      if (!claim||rawAmt==null) return;
+      const amtStr=String(rawAmt).replace(/[$,\s]/g,'').replace(/^-\$/,'-');
+      const amount=parseFloat(amtStr);
+      if (!isNaN(Number(claim))&&!isNaN(amount)&&amount!==0) remitLines.push(claim+'\t'+amount);
+    });
+  }
+
+  if (!ref) ref = sheetName;
+  if (remitLines.length <= 1) return null; // no data rows
+  return {co, ref, amt, date: payDate, remit: remitLines.join('\n')};
 }
 
 // ── Multi-tab Excel upload ────────────────────────────────────────────────────
@@ -740,198 +910,15 @@ async function loadMultiTab(input) {
     const newPayments = [];
 
     sheets.forEach(sheetName => {
-      const ws = wb.Sheets[sheetName];
-      const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:null, raw:true});
-      if (!rows||rows.length<2) return;
-
-      // Find the actual header row — some Excel files have a blank or title row above the column headers.
-      // Scan rows 0-4 for the first row containing known column header keywords.
-      let headerRowIdx = 0;
-      for (let ri = 1; ri < Math.min(5, rows.length); ri++) {
-        const rc = rows[ri].map(c=>String(c||'').toLowerCase());
-        if (rc.some(c=>c.includes('work order')||c==='wo #'||c==='wo#'||c.includes('invoice #')||c.includes('claim')||c==='check')) {
-          headerRowIdx = ri;
-          break;
-        }
-      }
-      const row0raw = rows[headerRowIdx];
-      const row0 = row0raw.map(c=>String(c||'').toLowerCase());
-
-      // Detect company from header row content
-      let co = 'Rely Home Warranty'; // default for Rely Excel format
-      if (row0.some(c=>c.includes('rely'))) co = 'Rely Home Warranty';
-      else if (row0.some(c=>c.includes('first american')||c.includes('falcon'))) co = 'First American / FALCON';
-      else if (row0.some(c=>c.includes('lessen'))) co = 'Lessen';
-      else if (row0.some(c=>c.includes('cinch'))) co = 'Cinch Home Services';
-      else if (row0.some(c=>c.includes('frontdoor'))) co = 'Frontdoor';
-      else if (row0.some(c=>c.includes('rheem'))) co = 'Rheem';
-      // Lessen Excel: header row has "Invoice #" and "Wo #" columns (no company name in header)
-      else if (row0.some(c=>c==='wo #'||c==='wo#') && row0.some(c=>c==='invoice #'||c==='invoice#')) co = 'Lessen';
-      // Cinch Excel: header has "Payment method" (holds SCC#) + "Payment total"
-      // Tabs may also have "wo#" column; "payment amount" was renamed "payment total" by user
-      else if (row0.some(c=>c.includes('payment method')) && row0.some(c=>c.includes('payment total'))) co = 'Cinch Home Services';
-
-      console.log('[loadMultiTab]', sheetName, '→ co:', co, '| headerRow:', headerRowIdx, '| cols:', row0.filter(c=>c).join(' | '));
-
-      // Extract check number, total, and date.
-      // Scan the entire sheet so the check/payment summary is found regardless of which row it's on.
-      // To avoid picking up individual claim amounts, only extract from a row that contains "Check" info.
-      let ref = '', amt = '', payDate = '';
-      rows.forEach(row => {
-        if (!row) return;
-        const isCheckRow = row.some(cell => {
-          const s = String(cell||'');
-          return s.toLowerCase() === 'check' || /Check\s*#/i.test(s);
-        });
-        // For Rely format the header row has the standalone "Check" keyword; for all others
-        // only process rows that explicitly contain check/payment summary text.
-        if (!isCheckRow && row !== row0raw) return;
-        row.forEach((cell, idx) => {
-          if (cell == null) return;
-          // Rely: standalone "Check" keyword — adjacent cells hold date / ref / total
-          if (String(cell||'').toLowerCase() === 'check' && row === row0raw) {
-            if (row[idx-1]) {
-              const raw = String(row[idx-1]);
-              const mdy = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-              if (mdy) payDate = `${mdy[3]}-${mdy[1].padStart(2,'0')}-${mdy[2].padStart(2,'0')}`;
-            }
-            if (row[idx+1]) ref = String(row[idx+1]);
-            if (row[idx+2]) amt = '$' + Number(row[idx+2]).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
-          }
-          const cellStr = String(cell);
-          // Lessen: "Check #: #10090511 via ACH" combined in one cell
-          const lessenCheck = cellStr.match(/Check\s*#[:\s]+#?(\w+)/i);
-          if (lessenCheck && !ref) ref = lessenCheck[1];
-          // Dollar amount as text: "$3,947.49"
-          const lessenAmt = cellStr.match(/\$\s*([\d,]+\.\d{2})/);
-          if (lessenAmt && !amt) amt = '$' + lessenAmt[1].replace(/,/g,'');
-          // Excel number cell (raw:true returns number, no $ sign)
-          if (typeof cell === 'number' && cell > 0 && !amt) amt = '$' + cell.toFixed(2);
-          // Date as text: "4/17/2026"
-          const lessenDate = cellStr.match(/(\d{1,2}\/\d{1,2}\/\d{4})/);
-          if (lessenDate && !payDate) {
-            const mdy = lessenDate[1].match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-            payDate = mdy ? `${mdy[3]}-${mdy[1].padStart(2,'0')}-${mdy[2].padStart(2,'0')}` : lessenDate[1];
-          }
-          // Date as Date object (XLSX cellDates:true)
-          if (cell instanceof Date && !isNaN(cell.getTime()) && !payDate) {
-            payDate = `${cell.getFullYear()}-${String(cell.getMonth()+1).padStart(2,'0')}-${String(cell.getDate()).padStart(2,'0')}`;
-          }
-        });
-      });
-
-      // Build remittance as tab-separated WO#/Claim#	Amount
-      const remitLines = ['Claim #	Amount'];
-
-      if (co === 'Lessen') {
-        // Lessen Excel columns: Invoice # (col 0) | WO # (col 1) | Amount (col 2)
-        const woCol = row0.findIndex(c=>c==='wo #'||c==='wo#');
-        const amtCol = row0.findIndex(c=>c==='amount');
-        rows.slice(headerRowIdx + 1).forEach(row => {
-          const wo = String(row[woCol >= 0 ? woCol : 1]||'').trim();
-          const rawAmt = row[amtCol >= 0 ? amtCol : 2];
-          if (!wo || rawAmt == null) return;
-          const amount = parseFloat(String(rawAmt).replace(/[$,\s]/g,''));
-          if (/^B\d{7,10}$/.test(wo) && !isNaN(amount) && amount !== 0) {
-            remitLines.push(wo + '	' + amount.toFixed(2));
-          }
-        });
-        // Fallback: if the check row didn't yield a total, sum the line items
-        if (!amt && remitLines.length > 1) {
-          const total = remitLines.slice(1).reduce((s,l) => s + (parseFloat(l.split('\t')[1])||0), 0);
-          if (total > 0) amt = '$' + total.toFixed(2);
-        }
-        console.log('[Lessen]', sheetName, '→ ref:', ref, '| amt:', amt, '| payDate:', payDate, '| lines:', remitLines.length-1);
-      } else if (co === 'Cinch Home Services') {
-        // Cinch Excel columns: WO# | Payment | Payment number | Payment method (SCC#) | Payment amount | Date
-        // Cinch columns: Work order | Payment amount | [blank] | [blank] | Payment number | Payment method (SCC#) | Payment amount* | Date
-        // *Rename the second "Payment amount" to "Payment total" in the Excel so "Payment amount" is unique.
-        // SCC# (SCCV...) is in "Payment method"; CCC# in same cell is ignored.
-        const woCol     = row0.findIndex(c=>c.includes('work order')||c==='wo#'||c==='wo #');
-        const methodCol = row0.findIndex(c=>c.includes('payment method'));
-        const amtCol    = row0.findIndex(c=>c.includes('payment total')||c.includes('payment amount'));
-        const dateCol   = row0.findIndex(c=>c==='date');
-        const numCol    = row0.findIndex(c=>c.includes('payment number'));
-        // 'payment' col = per-row individual amount (distinct from 'payment total'/'payment number'/'payment method')
-        const payCol = row0.findIndex(c => c.trim() === 'payment');
-        let runningTotal = 0;
-        let debuggedFirst = false;
-        rows.slice(headerRowIdx + 1).forEach(row => {
-          // Capture ref, date, and chip total from ANY row — the summary row often has
-          // payment number and date without any SCC#, so we must extract these before the SCC# check.
-          if (!ref && numCol >= 0 && row[numCol]) ref = String(row[numCol]);
-          if (!amt && amtCol >= 0 && row[amtCol] != null) {
-            const chipAmt = parseFloat(String(row[amtCol]).replace(/[^0-9.]/g,''));
-            if (!isNaN(chipAmt) && chipAmt > 0) amt = '$' + chipAmt.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
-          }
-          if (!payDate && dateCol >= 0 && row[dateCol] != null) {
-            const dc = row[dateCol];
-            if (dc instanceof Date && !isNaN(dc.getTime())) {
-              payDate = `${dc.getFullYear()}-${String(dc.getMonth()+1).padStart(2,'0')}-${String(dc.getDate()).padStart(2,'0')}`;
-            } else {
-              const raw = String(dc);
-              const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-              const mdy = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-              payDate = iso ? raw : mdy ? `${mdy[3]}-${mdy[1].padStart(2,'0')}-${mdy[2].padStart(2,'0')}` : raw;
-            }
-          }
-
-          // Find SCC# in any cell — only rows with an SCC# become remittance line items
-          let sccRef = null, sccCellIdx = -1;
-          for (let ci = 0; ci < row.length; ci++) {
-            const m = String(row[ci]||'').match(/\b(SCCV[A-Z0-9]+-\d+)\b/i);
-            if (m) { sccRef = m[1]; sccCellIdx = ci; break; }
-          }
-          if (!debuggedFirst) {
-            debuggedFirst = true;
-            console.log('[Cinch first row]', sheetName, row.map((c,i)=>`[${i}:${row0[i]}]=${c}`).join(' '));
-          }
-          if (!sccRef) return;
-
-          // Amount priority: labeled 'payment' col → cell adjacent to SCC# → amtCol → col 1
-          let rawAmt;
-          if (payCol >= 0 && row[payCol] != null) rawAmt = row[payCol];
-          else if (sccCellIdx >= 0 && row[sccCellIdx + 1] != null) rawAmt = row[sccCellIdx + 1];
-          else rawAmt = amtCol >= 0 ? row[amtCol] : row[1];
-
-          if (rawAmt == null) return;
-          const amount = parseFloat(String(rawAmt).replace(/[^0-9.]/g,''));
-          if (isNaN(amount) || amount === 0) return;
-          remitLines.push(sccRef + '	' + amount.toFixed(2));
-          runningTotal += amount;
-        });
-        if (!amt && runningTotal > 0) amt = '$' + runningTotal.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
-        if (!ref) ref = sheetName;
-      } else {
-        // Generic / Rely format: find header row (contains "Claim"), then col 0 = claim, col 1 = amount
-        let headerIdx = -1;
-        rows.forEach((row, i) => {
-          if (row.some(c=>String(c||'').toLowerCase().includes('claim'))) headerIdx = i;
-        });
-        const dataRows = headerIdx >= 0 ? rows.slice(headerIdx+1) : rows.slice(2);
-        dataRows.forEach(row => {
-          const claim = row[0];
-          const rawAmt = row[1];
-          if (!claim || rawAmt == null) return;
-          // Normalize: handles $-75.00, -$75.00, "$-75.00", plain numbers
-          const amtStr = String(rawAmt).replace(/[$,\s]/g,'').replace(/^-\$/, '-');
-          const amount = parseFloat(amtStr);
-          if (!isNaN(Number(claim)) && !isNaN(amount) && amount !== 0) {
-            remitLines.push(claim + '	' + amount);
-          }
-        });
-      }
-
-      if (!ref) ref = sheetName; // last-resort fallback for any company
-      if (remitLines.length <= 1) return; // no data rows
-
+      const result = _parseExcelSheet(wb, sheetName);
+      if (!result) return;
       newPayments.push({
         id: uid(),
-        co,
-        ref,
-        amt,
-        date: payDate,
-        remit: remitLines.join('\n'),
+        co: result.co,
+        ref: result.ref,
+        amt: result.amt,
+        date: result.date,
+        remit: result.remit,
         src: 'csv',
         fromSheet: sheetName
       });
@@ -961,14 +948,27 @@ function autoDetectCo(text) {
     el('m-co').value = 'Frontdoor';
   else if (/\bSCCV[A-Z0-9]+-\d+\b/i.test(text))
     el('m-co').value = 'Cinch Home Services';
+  else if (/2[-.]10\b|home\s*buyer/i.test(text))
+    el('m-co').value = '2-10 Home Buyers Warranty';
   else if (/\bClaim\s*#/i.test(text))
     el('m-co').value = 'Rely Home Warranty';
+  else if (/work\s*order/i.test(text) && /\b\d{4}-\d{4}\b/.test(text))
+    el('m-co').value = 'Old Republic';
 }
 
 function autoExtractRef(text) {
   if (el('m-ref').value) return; // don't override manual entry
   const eftpyM = text.match(/\bEFTPY(\d+)\b/i);
-  if (eftpyM) el('m-ref').value = 'EFTPY' + eftpyM[1];
+  if (eftpyM) { el('m-ref').value = 'EFTPY' + eftpyM[1]; return; }
+  // Old Republic: Check # (7 digits) on first data row after the amount
+  if (/work\s*order/i.test(text) && /\b\d{4}-\d{4}\b/.test(text)) {
+    for (const line of text.split(/\n|\r/)) {
+      if (/\d{4}-\d{4}/.test(line)) {
+        const m = line.match(/\b(\d{7})\b/);
+        if (m) { el('m-ref').value = 'Check #' + m[1]; break; }
+      }
+    }
+  }
 }
 
 function getRemit() {
@@ -982,6 +982,8 @@ const BANK_CO_MAP = {
   'Cinch':          'Cinch Home Services',
   'First American': 'First American / FALCON',
   'Rely':           'Rely Home Warranty',
+  '2-10':           '2-10 Home Buyers Warranty',
+  'Old Republic':   'Old Republic',
 };
 function pullBankRow(cb, i) {
   cb.closest('label').style.opacity = cb.checked ? '0.4' : '1';
@@ -1040,8 +1042,8 @@ function parseRemittance(remit, company) {
       const amt = parseFloat(nums[nums.length-1].replace(/,/g,''));
       if (!isNaN(amt)&&amt>0) items.push({ref:wo, amount:amt, secondary_ref:nums[0]});
     });
-  } else if (co.includes('rely')) {
-    // Rely: tab-separated, Claim # in col 0, Amount in col 1
+  } else if (co.includes('rely') || co.includes('2-10') || co.includes('home buyer')) {
+    // Rely / 2-10 Home Buyers Warranty: tab-separated, Claim # in col 0, Amount in col 1
     // Format: "321688235\t$80.00" or "321688235\t-$75.00" for deductions
     lines.forEach(line => {
       const parts = line.split('\t').map(s=>s.trim());
@@ -1156,6 +1158,17 @@ function parseRemittance(remit, company) {
         if (!isNaN(paid) && paid > 0) items.push({ref: invNum, amount: paid});
       }
     }
+  } else if (co.includes('old republic')) {
+    // Old Republic: tab-separated, Work Order (NNNN-NNNN) col 0, Amount col 1
+    // Check # appears in col ~4 of first data row only; extracted separately by autoExtractRef
+    lines.forEach(line => {
+      const parts = line.split('\t').map(s=>s.trim());
+      const wo = parts[0];
+      if (!/^\d{4}-\d{4}$/.test(wo)) return; // skip header and non-WO rows
+      const amt = parseFloat((parts[1]||'').replace(/[$,]/g,''));
+      if (isNaN(amt)||amt<=0) return;
+      items.push({ref: wo, amount: amt});
+    });
   } else {
     // Generic: extract any reference numbers and amounts
     lines.forEach(line => {
