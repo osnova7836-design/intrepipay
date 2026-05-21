@@ -451,6 +451,9 @@ async function applyJobberPayment({
         } finally {
           if (!leaveOpen) await page.close();
         }
+        // Give Jobber time to finish processing the previous payment before opening
+        // the next batch — navigating immediately can result in a blank form.
+        if (!isLast) await new Promise(r => setTimeout(r, 5000));
       }
     } finally {
       await browser.close(); // disconnects Playwright without closing Chrome
