@@ -310,13 +310,16 @@ async function ensureInvoicesChecked(page, invoiceIds) {
     }
 
     // Use JS dispatch to avoid Playwright waiting for a navigation that may not settle.
+    // Catch "execution context destroyed" — this means the click triggered a navigation;
+    // the URL check below handles recovery.
     await page.evaluate((i) => {
       const cb = document.querySelectorAll('input[type="checkbox"]')[i];
       if (cb && !cb.checked) cb.click();
-    }, Number(idx));
+    }, Number(idx)).catch(() => {});
     await page.waitForTimeout(400);
 
-    // If Jobber's SPA navigated away (known issue at deep indices), go back and verify.
+    // If Jobber's SPA navigated away, go back and continue — remaining invoices
+    // will be re-clicked (the isChecked guard above skips already-checked ones).
     if (page.url() !== paymentUrl) {
       console.log(`  ⚠ SPA navigated away after checkbox ${idx} — returning to payment page`);
       await page.goto(paymentUrl, { waitUntil: 'load' });
