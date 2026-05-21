@@ -203,16 +203,29 @@ async function ensureInvoicesChecked(page, invoiceIds) {
       }
     }
 
+    // Wait up to 5s for the invoice list to render its first rows
+    await new Promise(r => {
+      const start = Date.now();
+      const check = () => {
+        if (document.querySelectorAll('input[type="checkbox"]').length > 0) r();
+        else if (Date.now() - start < 5000) setTimeout(check, 200);
+        else r();
+      };
+      setTimeout(check, 200);
+    });
+
     // Pass 0: click anything already visible without scrolling
     tryClickVisible();
 
-    // Scroll to load more rows until all found, list exhausted, or row cap hit
-    let prevCount = 0;
+    // Scroll to load more rows until all found, list exhausted, or row cap hit.
+    // prevCount starts at -1 so the loop always runs at least once even if
+    // the initial row count is 0.
+    let prevCount = -1;
     while (clicked.length < ids.length) {
       const cbs = document.querySelectorAll('input[type="checkbox"]');
       if (cbs.length === prevCount || cbs.length > maxRows) break;
       prevCount = cbs.length;
-      cbs[cbs.length - 1].scrollIntoView({ behavior: 'instant', block: 'nearest' });
+      if (cbs.length > 0) cbs[cbs.length - 1].scrollIntoView({ behavior: 'instant', block: 'nearest' });
       await new Promise(r => setTimeout(r, 400));
       tryClickVisible();
     }
