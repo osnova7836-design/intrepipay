@@ -293,25 +293,10 @@ async function ensureInvoicesChecked(page, invoiceIds) {
 
   const notFound = invoiceIds.filter((id) => indices[id] === undefined);
   if (notFound.length > 0) {
-    // Count checked checkboxes and match them to our list in order.
-    const checkedIndices = await page.evaluate(() =>
-      Array.from(document.querySelectorAll('input[type="checkbox"]'))
-        .map((cb, i) => ({ i, checked: cb.checked }))
-        .filter((r) => r.checked)
-        .map((r) => r.i)
-    );
-    console.log(`  Pre-checked checkbox indices: ${checkedIndices.join(', ')}`);
-
-    if (checkedIndices.length === invoiceIds.length) {
-      console.log('  Count matches — using pre-selected indices.');
-      invoiceIds.forEach((id, i) => { indices[id] = checkedIndices[i]; });
-    } else {
-      console.log(`\n  DOM search missed: ${notFound.join(', ')}. Dumping rows for manual inspection:`);
-      await dumpCheckboxRows(page);
-      throw new Error(
-        `Could not identify checkboxes for: ${notFound.join(', ')}.\n` +
-        'See row dump above — match invoice numbers to database IDs.'
-      );
+    console.log(`  WARNING: ${notFound.length} invoice(s) not found in visible list — skipping (likely already paid or beyond row cap):`);
+    notFound.forEach(id => console.log(`    - ${id}`));
+    if (Object.keys(indices).length === 0) {
+      throw new Error('No invoices found in the payment form at all — aborting.');
     }
   }
 
@@ -451,9 +436,9 @@ async function applyJobberPayment({
         } finally {
           if (!leaveOpen) await page.close();
         }
-        // Give Jobber time to finish processing the previous payment before opening
-        // the next batch — navigating immediately can result in a blank form.
-        if (!isLast) await new Promise(r => setTimeout(r, 5000));
+        // Give Jobber time to finish processing and Chrome time to GC the previous
+        // tab's DOM before opening the next batch.
+        if (!isLast) await new Promise(r => setTimeout(r, 10000));
       }
     } finally {
       await browser.close(); // disconnects Playwright without closing Chrome
