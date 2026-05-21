@@ -373,6 +373,11 @@ async function applyJobberPaymentBatch(page, { clientId, invoiceIds, type, ref, 
   console.log(`Ensuring invoices checked: ${invoiceIds.join(', ')}`);
   await ensureInvoicesChecked(page, invoiceIds);
 
+  // Scroll back to the top so the Transaction Date field is already in view —
+  // Playwright scrolling it into view through a large invoice DOM crashes Chrome.
+  await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
+  await page.waitForTimeout(1500);
+
   // Fill date last so React can't overwrite it.
   console.log(`Filling transaction date "${date}"`);
   await fillTransactionDate(page, date);
