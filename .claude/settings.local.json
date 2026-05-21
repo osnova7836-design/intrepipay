@@ -1,0 +1,41 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(PLAYWRIGHT_BROWSERS_PATH='D:\\\\playwright-browsers' node *)",
+      "PowerShell(& \"D:\\\\intrepipay\\\\scripts\\\\launch-chrome-debug.ps1\")",
+      "Bash(node *)",
+      "PowerShell(Stop-Process *)",
+      "Bash(Get-Content *)",
+      "Bash(git *)",
+      "PowerShell(powershell -ExecutionPolicy Bypass -File D:\\\\intrepipay\\\\scripts\\\\refresh-render-cookies.ps1)",
+      "Bash(xargs '-I{}' sh -c 'sha=$\\(echo {} | cut -d\" \" -f1\\); git show $sha:public/index.html 2>/dev/null | grep -n \"location.href\\\\|connected\\\\|DOMContent\\\\|fetchJobber\\\\|refresh\\\\|loop\\\\|redirect\" | head -5 && echo \"---$sha---\"')",
+      "Bash(npm install *)",
+      "WebFetch(domain:intrepipay.onrender.com)",
+      "WebFetch(domain:intrepipay.com)",
+      "WebSearch",
+      "WebFetch(domain:developer.getjobber.com)",
+      "PowerShell(Get-ChildItem D:\\\\intrepipay -Recurse -File | Where-Object { $_.FullName -notmatch 'node_modules' } | Select-Object FullName)",
+      "Bash(dir D:\\\\intrepipay /b)",
+      "Bash(findstr /v node_modules)",
+      "PowerShell(Get-ChildItem \"D:\\\\intrepipay\" | Where-Object { $_.Name -ne \"node_modules\" } | Format-Table Name, PSIsContainer -AutoSize)",
+      "Bash(npx kill-port *)",
+      "Bash(curl -s http://localhost:3000/)",
+      "Bash(curl -s http://localhost:3000/api/invoices)",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('count:', len\\(d\\)\\)\")",
+      "PowerShell(Get-PSDrive C | Select-Object Used, Free, @{N='FreeGB';E={[math]::Round\\($_.Free/1GB,2\\)}}, @{N='UsedGB';E={[math]::Round\\($_.Used/1GB,2\\)}})",
+      "Bash(wmic logicaldisk *)",
+      "PowerShell($free = \\(Get-PSDrive C\\).Free; Write-Host \"C: free: $\\([math]::Round\\($free/1GB, 2\\)\\) GB\")",
+      "PowerShell(cd D:\\\\intrepipay && git show 89dabb9:public/index.html | Select-String -Pattern \".\" | Select-Object -Skip 640 -First 120 | ForEach-Object { $_.Line })",
+      "PowerShell(cd D:\\\\intrepipay && git show 89dabb9:public/index.html | Select-String -Pattern \".\" | Select-Object -Skip 500 -First 150 | ForEach-Object { $_.Line })",
+      "PowerShell(Get-NetTCPConnection *)",
+      "PowerShell(netstat *)",
+      "PowerShell(Get-Process *)",
+      "PowerShell(Get-Content C:\\\\Windows\\\\System32\\\\drivers\\\\etc\\\\hosts | Where-Object { $_ -notmatch \"^#\" -and $_.Trim\\(\\) -ne \"\" })",
+      "PowerShell(Invoke-WebRequest -Uri \"http://localhost:3000\" -UseBasicParsing -TimeoutSec 5 | Select-Object -ExpandProperty StatusCode)",
+      "PowerShell(Resolve-DnsName *)",
+      "PowerShell(nslookup *)",
+      "PowerShell(Get-ChildItem D:\\\\intrepipay -Name | Where-Object { $_ -match \"deploy|Makefile|Dockerfile|\\\\.sh$|nginx|caddy|pm2|ecosystem\" })",
+      "PowerShell(Invoke-WebRequest -Uri \"http://127.0.0.1:9222/json/version\" -UseBasicParsing -TimeoutSec 3 | Select-Object -ExpandProperty Content)"
+    ]
+  }
+}

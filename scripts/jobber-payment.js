@@ -181,11 +181,24 @@ async function fillTransactionDate(page, date) {
 // comes into view. Runs entirely inside ONE page.evaluate() call so there is
 // only one V8 Zone allocation — the per-invoice loop approach made hundreds of
 // separate evaluate() calls which exhausted Zone memory and crashed Chrome.
-async function ensureInvoicesChecked(page, invoiceIds) {
+async function ensureInvoicesChecked(page, invoiceIds, { type, ref } = {}) {
   const paymentUrl = page.url();
-  const MAX_ROWS = 100;
+  let clicked = [], skipped = invoiceIds.map(String), debug = null;
 
-  const { clicked, skipped } = await page.evaluate(async (ids, maxRows) => {
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    if (attempt === 2) {
+      // Navigated away mid-evaluate — go back, re-fill form, and try once more.
+      const badUrl = page.url();
+      console.log(`  Page navigated to ${badUrl} — reloading payment form for retry`);
+      await page.goto(paymentUrl, { waitUntil: 'load' });
+      await page.waitForSelector('select, input[type="text"], input[type="date"]', { timeout: 30000 });
+      await page.waitForSelector('[data-testid="ATL-DataList-stickyHeader"]', { timeout: 15000 }).catch(() => {});
+      await page.waitForTimeout(2000);
+      if (type) await selectPaymentMethod(page, type);
+      if (ref && type) await fillReference(page, type, ref);
+    }
+
+    ({ clicked, skipped, debug } = await page.evaluate(async ({ ids }) => {
     const needed = new Set(ids);
     const clicked = [];
 
@@ -203,55 +216,113 @@ async function ensureInvoicesChecked(page, invoiceIds) {
       }
     }
 
+    // Find the scrollable container for Jobber's invoice list (virtual/windowed list).
+    // Walking up from the sticky header is most reliable; fall back to checkbox parent.
+    function getScrollContainer() {
+      const header = document.querySelector('[data-testid="ATL-DataList-stickyHeader"]');
+      if (header) {
+        let el = header.parentElement;
+        for (let i = 0; i < 12; i++) {
+          if (!el || el === document.body) break;
+          if (el.scrollHeight > el.clientHeight + 50) return el;
+          el = el.parentElement;
+        }
+      }
+      const cb = document.querySelector('input[type="checkbox"]');
+      if (cb) {
+        let el = cb.parentElement;
+        for (let i = 0; i < 20; i++) {
+          if (!el || el === document.body) break;
+          const s = window.getComputedStyle(el);
+          if ((s.overflowY === 'auto' || s.overflowY === 'scroll') && el.scrollHeight > el.clientHeight + 10) return el;
+          el = el.parentElement;
+        }
+      }
+      return document.scrollingElement || document.body;
+    }
+
+    function getScrollTop(c) {
+      return (c === document.scrollingElement || c === document.body)
+        ? (window.scrollY || document.documentElement.scrollTop)
+        : c.scrollTop;
+    }
+
+    function scrollDown(c) {
+      if (c === document.scrollingElement || c === document.body) {
+        window.scrollBy(0, 600);
+      } else {
+        c.scrollTop += 600;
+        // No dispatchEvent — setting scrollTop already fires a native scroll event
+        // on the element. A bubbling synthetic event can accidentally hit Jobber's
+        // router and trigger a page navigation mid-evaluate.
+      }
+    }
+
     // Wait up to 5s for the invoice list to render its first rows
     await new Promise(r => {
       const start = Date.now();
-      const check = () => {
+      (function check() {
         if (document.querySelectorAll('input[type="checkbox"]').length > 0) r();
         else if (Date.now() - start < 5000) setTimeout(check, 200);
         else r();
-      };
-      setTimeout(check, 200);
+      })();
     });
 
-    // Pass 0: click anything already visible without scrolling
     tryClickVisible();
 
-    // Scroll to load more rows until all found, list exhausted, or row cap hit.
-    // prevCount starts at -1 so the loop always runs at least once even if
-    // the initial row count is 0.
-    let prevCount = -1;
-    while (clicked.length < ids.length) {
-      const cbs = document.querySelectorAll('input[type="checkbox"]');
-      if (cbs.length === prevCount || cbs.length > maxRows) break;
-      prevCount = cbs.length;
-      if (cbs.length > 0) cbs[cbs.length - 1].scrollIntoView({ behavior: 'instant', block: 'nearest' });
-      await new Promise(r => setTimeout(r, 400));
-      tryClickVisible();
+    if (clicked.length < ids.length) {
+      const container = getScrollContainer();
+      let stableCount = 0;
+      let lastScrollTop = -1;
+
+      // Scroll until all found, or scroll position stops changing (end of list).
+      // Up to 150 iterations × 700ms ≈ 105s max. Stops early when all clicked.
+      for (let iter = 0; iter < 150 && clicked.length < ids.length; iter++) {
+        const top = getScrollTop(container);
+        if (top === lastScrollTop) {
+          stableCount++;
+          if (stableCount >= 3) break;
+        } else {
+          stableCount = 0;
+        }
+        lastScrollTop = top;
+        scrollDown(container);
+        await new Promise(r => setTimeout(r, 700));
+        tryClickVisible();
+      }
     }
 
     const skipped = ids.filter(id => !clicked.includes(id));
-    return { clicked, skipped };
-  }, invoiceIds.map(String), MAX_ROWS).catch(err => {
-    // Navigation mid-evaluate destroys the context — recover below
-    console.log(`  evaluate interrupted (${err.message.slice(0, 80)})`);
-    return { clicked: [], skipped: invoiceIds.map(String) };
-  });
+    const debug = clicked.length < ids.length ? {
+      cbCount: document.querySelectorAll('input[type="checkbox"]').length,
+      invoiceLinks: Array.from(document.querySelectorAll('a[href*="/invoices/"]')).slice(0, 8).map(a => a.getAttribute('href')),
+      pageUrl: window.location.href,
+    } : null;
+    return { clicked, skipped, debug };
+    }, { ids: invoiceIds.map(String) }).catch(err => {
+      console.log(`  evaluate interrupted (${err.message.slice(0, 80)})`);
+      return { clicked: [], skipped: invoiceIds.map(String), debug: null };
+    }));
 
-  console.log(`  Clicked ${clicked.length}/${invoiceIds.length} invoices`);
-  if (skipped.length) {
-    console.log(`  Skipped ${skipped.length} (beyond row cap or not in outstanding list):`);
+    console.log(`  Clicked ${clicked.length}/${invoiceIds.length} invoices${attempt > 1 ? ` (attempt ${attempt})` : ''}`);
+
+    if (clicked.length > 0) break;
+    if (attempt === 2) break; // no more retries
+    // If page didn't navigate away, a retry won't help — bail early
+    if (page.url() === paymentUrl) break;
+  }
+
+  if (skipped.length && skipped.length < invoiceIds.length) {
+    console.log(`  Skipped ${skipped.length} (beyond list or already paid):`);
     skipped.forEach(id => console.log(`    - ${id}`));
   }
 
-  if (page.url() !== paymentUrl) {
-    console.log('  SPA navigated away — returning to payment page');
-    await page.goto(paymentUrl, { waitUntil: 'load' });
-    await page.waitForSelector('select, input[type="text"]', { timeout: 30000 });
-    await page.waitForTimeout(1000);
-  }
-
   if (clicked.length === 0) {
+    if (debug) {
+      console.log(`  DEBUG cbCount=${debug.cbCount}`);
+      console.log(`  DEBUG pageUrl=${debug.pageUrl}`);
+      console.log(`  DEBUG invoiceLinks (first 8): ${JSON.stringify(debug.invoiceLinks)}`);
+    }
     throw new Error('No invoices found in the payment form — aborting.');
   }
 }
@@ -296,7 +367,7 @@ async function applyJobberPaymentBatch(page, { clientId, invoiceIds, type, ref, 
   // Check invoices first — scrolling 200+ rows triggers React re-renders that
   // reset the date field if it was filled earlier.
   console.log(`Ensuring invoices checked: ${invoiceIds.join(', ')}`);
-  await ensureInvoicesChecked(page, invoiceIds);
+  await ensureInvoicesChecked(page, invoiceIds, { type, ref });
 
   // Scroll back to the top so the Transaction Date field is already in view —
   // Playwright scrolling it into view through a large invoice DOM crashes Chrome.
