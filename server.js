@@ -155,9 +155,8 @@ app.get('/api/invoices', async (req, res) => {
     let hasNextPage = true;
     let cursor = null;
     let pageCount = 0;
-    let stopFetching = false;
 
-    while (hasNextPage && pageCount < 50 && !stopFetching) {
+    while (hasNextPage && pageCount < 50) {
       const afterClause = cursor ? `(first: 250, after: "${cursor}")` : `(first: 250)`;
       const query = `{
         invoices${afterClause} {
@@ -221,9 +220,8 @@ app.get('/api/invoices', async (req, res) => {
       pageCount++;
 
       const lastInv = page.nodes[page.nodes.length - 1];
-      if (lastInv && parseInt(lastInv.invoiceNumber) < 12000) stopFetching = true;
 
-      if (hasNextPage && !stopFetching) await new Promise(r => setTimeout(r, 1000));
+      if (hasNextPage) await new Promise(r => setTimeout(r, 1000));
 
       console.log(`Page ${pageCount}: ${page.nodes.length} invoices, hasNextPage: ${hasNextPage}, total: ${allInvoices.length}, lastInv#: ${lastInv?.invoiceNumber}`);
     }
