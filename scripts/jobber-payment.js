@@ -209,7 +209,7 @@ async function findCheckboxIndexByDom(page, invoiceId) {
       document.querySelectorAll('input[type="checkbox"]').length
     );
     if (count === prevCount) break;  // list fully loaded — invoice genuinely not present
-    if (count > 150) break;          // Chrome tab crashes above ~250 rows; invoice is likely already paid
+    if (count > 275) break;          // Chrome tab crashes above ~300 rows; invoice is likely already paid
     console.log(`    (${count} rows loaded — scrolling last into view...)`);
     prevCount = count;
 
