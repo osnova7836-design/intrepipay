@@ -14,9 +14,10 @@ function buildPaymentUrl({ clientId, invoiceIds }) {
   const u = new URL('/payments/new', JOBBER_ORIGIN);
   u.searchParams.set('clientId', clientId);
   u.searchParams.set('invoiceId', invoiceIds[0]); // First ID pre-selects on load
-  // DESCENDING puts newest invoices at the top — target invoices are recent so
-  // they land at low indices (< 50) instead of deep in the virtual list (200+)
-  u.searchParams.set('order', 'DESCENDING');
+  // ASCENDING puts oldest-due-date invoices first. Insurance checks typically cover
+  // older outstanding invoices, so they land near the top rather than buried below
+  // newer ones. Chrome tab crashes if the list grows beyond ~250 rows.
+  u.searchParams.set('order', 'ASCENDING');
   u.searchParams.set('sort', 'DUE_DATE');
   return u.toString();
 }
@@ -208,6 +209,7 @@ async function findCheckboxIndexByDom(page, invoiceId) {
       document.querySelectorAll('input[type="checkbox"]').length
     );
     if (count === prevCount) break;  // list fully loaded — invoice genuinely not present
+    if (count > 150) break;          // Chrome tab crashes above ~250 rows; invoice is likely already paid
     console.log(`    (${count} rows loaded — scrolling last into view...)`);
     prevCount = count;
 
