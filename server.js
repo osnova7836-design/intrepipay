@@ -30,7 +30,7 @@ function workerAuth(req, res, next) {
 
 const app = express();
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'public'), { etag: false, lastModified: false, setHeaders: (res, filePath) => { if (filePath.endsWith('.html')) res.setHeader('Cache-Control', 'no-store'); } }));
 
 const {
   JOBBER_CLIENT_ID,

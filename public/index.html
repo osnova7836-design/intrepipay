@@ -752,6 +752,7 @@ async function loadMPDF(input) {
 
 // ── Shared Excel sheet parser (used by loadMultiTab and loadMCSV) ─────────────
 function _parseExcelSheet(wb, sheetName) {
+  console.log('_parseExcelSheet VERSION 2 — Rheem+FA branches active');
   const ws = wb.Sheets[sheetName];
   const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:null, raw:true});
   if (!rows || rows.length < 2) return null;
@@ -779,6 +780,13 @@ function _parseExcelSheet(wb, sheetName) {
   else if (row0.some(c=>c.includes('work order')) && row0.some(c=>c.includes('check'))) co = 'Old Republic';
   else if (row0.some(c=>c==='wo #'||c==='wo#') && row0.some(c=>c==='invoice #'||c==='invoice#')) co = 'Lessen';
   else if (row0.some(c=>c.includes('payment method')) && row0.some(c=>c.includes('payment total'))) co = 'Cinch Home Services';
+
+  // Full-scan fallback: company name not in first rows (Rheem uses generic SAP header; FA uses "EFT Payment Report")
+  if (co === 'Rely Home Warranty') {
+    const fullText = rows.map(r => r.map(c=>String(c||'')).join('\t')).join('\n');
+    if (/document reference number/i.test(fullText) || /\b260\d{7,8}\b/.test(fullText)) co = 'Rheem';
+    else if (/\bEFTPY\d+\b/i.test(fullText) || /\bFALCON\b/i.test(fullText)) co = 'First American / FALCON';
+  }
 
   console.log('[_parseExcelSheet]', sheetName, '→ co:', co, '| headerRow:', headerRowIdx, '| cols:', row0.filter(c=>c).join(' | '));
 
@@ -903,6 +911,96 @@ function _parseExcelSheet(wb, sheetName) {
       remitLines.push(wo+'\t'+amount.toFixed(2));
     });
     if (!ref) ref=sheetName;
+  } else if (co === 'Rheem') {
+    // SAP-style EFT Excel: key/value header section, then "Remittance Detail" table
+    // Row labels in col 0, values in col 1
+    rows.forEach(row => {
+      const label = String(row[0]||'').toLowerCase().trim();
+      const val = row[1];
+      if (label === 'payment reference number' && !ref) ref = String(val||'').trim();
+      if (label === 'payment date' && !payDate) {
+        if (val instanceof Date && !isNaN(val.getTime())) {
+          payDate = `${val.getFullYear()}-${String(val.getMonth()+1).padStart(2,'0')}-${String(val.getDate()).padStart(2,'0')}`;
+        } else {
+          const raw = String(val||'');
+          // SAP date format: "18-May-26"
+          const dmy = raw.match(/^(\d{1,2})-([A-Za-z]+)-(\d{2,4})$/);
+          const MONTHS = {jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
+          if (dmy && MONTHS[dmy[2].toLowerCase().slice(0,3)]) {
+            const y = dmy[3].length===2 ? '20'+dmy[3] : dmy[3];
+            payDate = `${y}-${String(MONTHS[dmy[2].toLowerCase().slice(0,3)]).padStart(2,'0')}-${String(dmy[1]).padStart(2,'0')}`;
+          } else {
+            const mdy = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+            if (mdy) payDate = `${mdy[3]}-${mdy[1].padStart(2,'0')}-${mdy[2].padStart(2,'0')}`;
+          }
+        }
+      }
+      if (label === 'payment amount') {
+        const v = parseFloat(String(val||'').replace(/[$,]/g,''));
+        if (!isNaN(v) && v > 0) amt = '$' + v.toFixed(2); // always override — generic loop may have picked up ref number as amount
+      }
+    });
+    // Find "Document Reference Number" header row; Amount Paid is the last col
+    const dataHdrIdx = rows.findIndex(r => /document reference number/i.test(String(r[0]||'')));
+    if (dataHdrIdx >= 0) {
+      const hdr = rows[dataHdrIdx].map(c=>String(c||'').toLowerCase());
+      const amtPaidCol = hdr.findIndex(c=>c.includes('amount paid'));
+      rows.slice(dataHdrIdx + 1).forEach(row => {
+        const wcnRaw = String(row[0]||'').trim();
+        const wcns = wcnRaw.match(/\b260\d{7,8}\b/g);
+        if (!wcns || wcns.length === 0) return;
+        const rawAmt = amtPaidCol >= 0 ? row[amtPaidCol] : null;
+        const amount = parseFloat(String(rawAmt||'').replace(/[$,]/g,''));
+        if (isNaN(amount) || amount <= 0) return;
+        remitLines.push(wcns.join(' ') + '\t' + amount.toFixed(2));
+      });
+    }
+    console.log('[Rheem]', sheetName, '→ ref:', ref, '| amt:', amt, '| payDate:', payDate, '| lines:', remitLines.length-1);
+  } else if (co === 'First American / FALCON') {
+    // FAHW EFT Excel: header section with EFTPY Payment #, then 2-row spanning column headers, then data
+    // Scan all cells for EFTPY reference
+    rows.forEach(row => { if (ref) return; row.forEach(cell => { const m=String(cell||'').match(/\bEFTPY(\d+)\b/i); if (m) ref='EFTPY'+m[1]; }); });
+    // Extract payment date from "Total Amount Paid on MM/DD/YYYY" row
+    rows.forEach(row => {
+      if (payDate) return;
+      const s = String(row[0]||'');
+      if (/total amount paid/i.test(s)) {
+        const m = s.match(/(\d{2}\/\d{2}\/\d{4})/);
+        if (m) { const mdy=m[1].match(/^(\d{2})\/(\d{2})\/(\d{4})$/); if (mdy) payDate=`${mdy[3]}-${mdy[1]}-${mdy[2]}`; }
+      }
+    });
+    // Find header row(s) — "Work Order" spans 2 rows; "Net Paid" may be in same or next row
+    let woCol = -1, netPaidCol = -1, dataStartIdx = -1;
+    rows.forEach((row, ri) => {
+      if (woCol >= 0) return;
+      const cells = row.map(c=>String(c||'').toLowerCase());
+      const wi = cells.findIndex(c=>c.includes('work order'));
+      if (wi < 0) return;
+      woCol = wi;
+      dataStartIdx = ri + 2; // data starts 2 rows after the first header row (spanning header)
+      // Search this row and next for "Net Paid" / "Net Amount"
+      const nextCells = (rows[ri+1]||[]).map(c=>String(c||'').toLowerCase());
+      const maxCols = Math.max(cells.length, nextCells.length);
+      for (let ci=0; ci<maxCols; ci++) {
+        if (/net paid|net amount/.test((cells[ci]||'')+' '+(nextCells[ci]||''))) { netPaidCol=ci; break; }
+      }
+    });
+    // Extract data rows
+    if (woCol >= 0 && netPaidCol >= 0 && dataStartIdx > 0) {
+      let runningTotal = 0;
+      rows.slice(dataStartIdx).forEach(row => {
+        const woCellRaw = row[woCol];
+        if (woCellRaw == null) return;
+        const woStr = typeof woCellRaw==='number' ? String(Math.round(woCellRaw)) : String(woCellRaw).trim();
+        if (!/^\d{7,10}$/.test(woStr)) return;
+        const amount = parseFloat(String(row[netPaidCol]||'').replace(/[$,\s]/g,''));
+        if (isNaN(amount) || amount === 0) return;
+        remitLines.push(woStr + '\t' + amount.toFixed(2));
+        if (amount > 0) runningTotal += amount;
+      });
+      if (!amt && runningTotal > 0) amt = '$' + runningTotal.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+    }
+    console.log('[FirstAmerican]', sheetName, '→ ref:', ref, '| amt:', amt, '| payDate:', payDate, '| woCol:', woCol, '| netPaidCol:', netPaidCol, '| lines:', remitLines.length-1);
   } else {
     // Generic / Rely / 2-10 format: find header row (contains "Claim"), detect claim and amount columns
     let headerIdx = -1;
@@ -1069,12 +1167,22 @@ function parseRemittance(remit, company) {
   const co = (company||'').toLowerCase();
 
   if (co.includes('first american')||co.includes('falcon')) {
-    // FALCON format: VendorInvoice FALCON# WorkOrder GrossAmt AdjAmt TotalAdj SvcFee Discount Other NetPaid
+    // Supports two formats:
+    // Excel (tab-separated): "622264360\t175.00"
+    // PDF (space-separated): VendorInvoice FALCON# WorkOrder GrossAmt AdjAmt TotalAdj SvcFee Discount Other NetPaid
     lines.forEach(line => {
-      // Match rows with numbers - work order is 3rd numeric column
+      const parts = line.split('\t');
+      if (parts.length >= 2) {
+        // Tab-separated (Excel): col 0 = work order, last col = net paid
+        const woStr = parts[0].replace(/[,\s]/g,'');
+        if (/^6[12]\d{7}$/.test(woStr)) {
+          const amt = parseFloat(parts[parts.length-1].replace(/[$,\s]/g,''));
+          if (!isNaN(amt) && amt > 0) { items.push({ref:woStr, amount:amt}); return; }
+        }
+      }
+      // PDF multi-column format
       const nums = line.match(/\d[\d,.]*/g);
       if (!nums||nums.length<4) return;
-      // Work order is typically a 9-digit number starting with 621 or 622
       const wo = nums.find(n=>n.replace(/,/g,'').match(/^6[12]\d{7}$/));
       if (!wo) return;
       const amt = parseFloat(nums[nums.length-1].replace(/,/g,''));
@@ -1162,18 +1270,27 @@ function parseRemittance(remit, company) {
       }
     }
   } else if (co.includes('rheem')) {
-    // Rheem: Document Reference Number (WCN), may be multiple WCNs on one line for the same invoice.
-    // One line = one invoice at the full line amount; first WCN is the match key.
-    lines.forEach(line => {
-      const wcns = line.match(/\b(260\d{7,8})\b/g);
-      const amtMatch = line.match(/\$?([\d,]+\.?\d{2})/g);
-      if (wcns&&amtMatch) {
-        const amt = parseFloat(amtMatch[amtMatch.length-1].replace(/[$,]/g,''));
-        if (!isNaN(amt)&&amt>0) {
-          items.push({ref:wcns[0], amount:amt, secondary_ref:wcns.join(', ')});
+    // Rheem: WCNs (260xxxxxxxx, comma-separated) on one line; amount on a later line in the same block.
+    // Scan forward from each WCN line to the next WCN line, take the last positive amount (= Amount Paid).
+    for (let i = 0; i < lines.length; i++) {
+      const wcns = lines[i].match(/\b(260\d{7,8})\b/g);
+      if (!wcns) continue;
+      let nextWcnIdx = lines.length;
+      for (let k = i + 1; k < lines.length; k++) {
+        if (/\b260\d{7,8}\b/.test(lines[k])) { nextWcnIdx = k; break; }
+      }
+      let amt = null;
+      for (let j = i; j < nextWcnIdx; j++) {
+        const m = lines[j].match(/\$?([\d,]+\.\d{2})/g);
+        if (m) {
+          const v = parseFloat(m[m.length-1].replace(/[$,]/g,''));
+          if (v > 0) amt = v;
         }
       }
-    });
+      if (amt) {
+        items.push({ref:wcns[0], amount:amt, secondary_ref:wcns.join(', ')});
+      }
+    }
   } else if (co.includes('all county')) {
     // All County check PDF: Memo column contains "inv NNNNN" where NNNNN = Jobber invoice #.
     // Bills Applied To and Ledger Breakdown both contain the same entries — dedupe by invoice #.
@@ -1222,7 +1339,7 @@ function parseRemittance(remit, company) {
   return items;
 }
 
-function lookupJobber(ref, company) {
+function lookupJobber(ref, company, secondaryRef) {
   const coLower = (company||'').toLowerCase();
 
   // Helper: pick best row from candidates by client name match, then highest invoice #
@@ -1255,6 +1372,19 @@ function lookupJobber(ref, company) {
     if (jobberMap['621'+ref]) return bestMatch(jobberMap['621'+ref]);
     const stripped = ref.replace(/^6[12]\d/, '');
     if (stripped.length > 6 && jobberMap[stripped]) return bestMatch(jobberMap[stripped]);
+  }
+
+  // Rheem: try all WCNs (primary + secondary) with exact then partial Subject match
+  if (coLower.includes('rheem')) {
+    const allWcns = [ref, ...(secondaryRef ? (secondaryRef.match(/\b260\d{7,8}\b/g)||[]) : [])];
+    for (const wcn of allWcns) {
+      if (jobberMap[wcn]) return bestMatch(jobberMap[wcn]);
+    }
+    // Partial match: Subject contains the WCN anywhere
+    for (const wcn of allWcns) {
+      const matchKey = Object.keys(jobberMap).find(k => !k.startsWith('inv:') && k.includes(wcn));
+      if (matchKey) return bestMatch(jobberMap[matchKey]);
+    }
   }
 
   // Case-insensitive fallback
@@ -1327,7 +1457,7 @@ function matchPayment(payment) {
   const bankMatch = matchedTxn ? fmtDate(matchedTxn.date)+' · '+matchedTxn.desc.substring(0,40)+' · '+fmt(matchedTxn.amount) : null;
 
   const lineItems = items.map(item => {
-    const jobberRow = lookupJobber(item.ref, payment.co);
+    const jobberRow = lookupJobber(item.ref, payment.co, item.secondary_ref);
 
     if (!jobberRow) {
       return {
@@ -1478,7 +1608,7 @@ COMPANY RULES:
 - Lessen: WO# starts with B, matches Subject
 - Cinch: SCC# in Comments column (not CCCV number)
 - Frontdoor: Dispatch ID matches Subject
-- Rheem: Document Reference Number (WCN) matches Subject
+- Rheem: WCN (260xxxxxxxx) appears inside Subject. Subject format: "CAS-XXXXXXX-XXXXXX - WCN 260xxxxxxx, 260xxxxxxx, ..."
 - All County: PDF Memo column has "inv NNNNN" — NNNNN is the Jobber Invoice # directly. Match to Invoice #, not Subject.
 RESPOND ONLY VALID JSON:
 {"payments":[{"co":"","ref":"","line_items":[{"ref":"","remittance_amount":0,"jobber_invoice":"","jobber_subject":"","jobber_status":"","jobber_amount":0,"difference":0,"status":"pastdue|draft|missing|mismatch|deduction","note":""}],"total_paid":0,"total_invoiced":0}]}`;
