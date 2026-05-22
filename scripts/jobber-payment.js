@@ -181,7 +181,7 @@ async function fillTransactionDate(page, date) {
 // comes into view. Runs entirely inside ONE page.evaluate() call so there is
 // only one V8 Zone allocation — the per-invoice loop approach made hundreds of
 // separate evaluate() calls which exhausted Zone memory and crashed Chrome.
-async function ensureInvoicesChecked(page, invoiceIds, { type, ref } = {}) {
+async function ensureInvoicesChecked(page, invoiceIds) {
   const paymentUrl = page.url();
 
   // Wait up to 8s for the invoice list to render its first checkboxes.
@@ -287,9 +287,7 @@ async function ensureInvoicesChecked(page, invoiceIds, { type, ref } = {}) {
       await page.waitForSelector('select, input[type="text"], input[type="date"]', { timeout: 30000 });
       await page.waitForSelector('[data-testid="ATL-DataList-stickyHeader"]', { timeout: 15000 }).catch(() => {});
       await page.waitForTimeout(2000);
-      if (type) await selectPaymentMethod(page, type);
-      if (ref && type) await fillReference(page, type, ref);
-      return ensureInvoicesChecked(page, invoiceIds, {}); // retry once, no further recursion
+      return ensureInvoicesChecked(page, invoiceIds); // retry once, no further recursion
     }
     throw new Error('No invoices found in the payment form — aborting.');
   }
@@ -326,21 +324,20 @@ async function applyJobberPaymentBatch(page, { clientId, invoiceIds, type, ref, 
     return;
   }
 
+  // Check invoices first — fill form fields after to avoid React re-renders
+  // resetting them during the scroll.
+  console.log(`Ensuring invoices checked: ${invoiceIds.join(', ')}`);
+  await ensureInvoicesChecked(page, invoiceIds);
+
+  // Scroll back to the top so the form fields are in view.
+  await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
+  await page.waitForTimeout(1500);
+
   console.log(`Setting payment method to "${type}"`);
   await selectPaymentMethod(page, type);
 
   console.log(`Filling reference number "${ref}"`);
   await fillReference(page, type, ref);
-
-  // Check invoices first — scrolling 200+ rows triggers React re-renders that
-  // reset the date field if it was filled earlier.
-  console.log(`Ensuring invoices checked: ${invoiceIds.join(', ')}`);
-  await ensureInvoicesChecked(page, invoiceIds, { type, ref });
-
-  // Scroll back to the top so the Transaction Date field is already in view —
-  // Playwright scrolling it into view through a large invoice DOM crashes Chrome.
-  await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
-  await page.waitForTimeout(1500);
 
   // Fill date last so React can't overwrite it.
   console.log(`Filling transaction date "${date}"`);
