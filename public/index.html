@@ -276,6 +276,7 @@ tr:hover td{background:var(--surface2)}
         <option>Rheem</option>
         <option>Old Republic</option>
         <option>All County First Choice</option>
+        <option>Lula</option>
         <option>Other</option>
       </select>
     </div>
@@ -628,6 +629,7 @@ function getBankCo(desc) {
   if (d.includes('OLD REPUBLIC')||d.includes('OLDREPUBLIC')) return 'Old Republic';
   if (d.includes('RELY')) return 'Rely';
   if (d.includes('ALLCOUNTY')||d.includes('PL*ALLCOUNTY')) return 'All County';
+  if (d.includes('LULA')) return 'Lula';
   return null;
 }
 
@@ -752,7 +754,7 @@ async function loadMPDF(input) {
 
 // ── Shared Excel sheet parser (used by loadMultiTab and loadMCSV) ─────────────
 function _parseExcelSheet(wb, sheetName) {
-  console.log('_parseExcelSheet VERSION 2 — Rheem+FA branches active');
+  console.log('_parseExcelSheet VERSION 3 — Rheem+FA+Lula branches active');
   const ws = wb.Sheets[sheetName];
   const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:null, raw:true});
   if (!rows || rows.length < 2) return null;
@@ -780,6 +782,7 @@ function _parseExcelSheet(wb, sheetName) {
   else if (row0.some(c=>c.includes('work order')) && row0.some(c=>c.includes('check'))) co = 'Old Republic';
   else if (row0.some(c=>c==='wo #'||c==='wo#') && row0.some(c=>c==='invoice #'||c==='invoice#')) co = 'Lessen';
   else if (row0.some(c=>c.includes('payment method')) && row0.some(c=>c.includes('payment total'))) co = 'Cinch Home Services';
+  else if (row0.some(c=>c.includes('payout id')) || row0.some(c=>c.includes('related jobs'))) co = 'Lula';
 
   // Full-scan fallback: company name not in first rows (Rheem uses generic SAP header; FA uses "EFT Payment Report")
   if (co === 'Rely Home Warranty') {
@@ -1001,6 +1004,34 @@ function _parseExcelSheet(wb, sheetName) {
       if (!amt && runningTotal > 0) amt = '$' + runningTotal.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
     }
     console.log('[FirstAmerican]', sheetName, '→ ref:', ref, '| amt:', amt, '| payDate:', payDate, '| woCol:', woCol, '| netPaidCol:', netPaidCol, '| lines:', remitLines.length-1);
+  } else if (co === 'Lula') {
+    // Lula payout Excel: one header row + one data row per payout
+    // Columns: PAYOUT ID | RELATED JOBS | JOBS TOTAL | DEDUCTIONS | TOTAL PAYOUT | STATUS | PAYOUT DATE
+    const payoutIdCol    = row0.findIndex(c => c.includes('payout id'));
+    const relatedJobsCol = row0.findIndex(c => c.includes('related jobs'));
+    const totalPayoutCol = row0.findIndex(c => c.includes('total payout'));
+    const payoutDateCol  = row0.findIndex(c => c.includes('payout date'));
+    const monthMap = {january:1,february:2,march:3,april:4,may:5,june:6,july:7,august:8,september:9,october:10,november:11,december:12};
+    let runningTotal = 0;
+    rows.slice(headerRowIdx + 1).forEach(row => {
+      if (!row) return;
+      if (!ref && payoutIdCol >= 0 && row[payoutIdCol]) ref = String(row[payoutIdCol]).trim();
+      if (!payDate && payoutDateCol >= 0 && row[payoutDateCol]) {
+        const ds = String(row[payoutDateCol]);
+        const dm = ds.match(/([A-Za-z]+)\s+(\d{1,2}),\s+(\d{4})/);
+        if (dm) { const mo = monthMap[dm[1].toLowerCase()]; if (mo) payDate = `${dm[3]}-${String(mo).padStart(2,'0')}-${String(dm[2]).padStart(2,'0')}`; }
+      }
+      const woRaw  = relatedJobsCol >= 0 ? row[relatedJobsCol] : null;
+      const amtRaw = totalPayoutCol >= 0 ? row[totalPayoutCol] : null;
+      if (!woRaw || amtRaw == null) return;
+      const wo = String(woRaw).trim();
+      const amount = parseFloat(String(amtRaw).replace(/[$,\s]/g, ''));
+      if (!wo || isNaN(amount) || amount <= 0) return;
+      remitLines.push(wo + '\t' + amount.toFixed(2));
+      runningTotal += amount;
+    });
+    if (!amt && runningTotal > 0) amt = '$' + runningTotal.toFixed(2);
+    console.log('[Lula]', sheetName, '→ ref:', ref, '| amt:', amt, '| payDate:', payDate, '| lines:', remitLines.length-1);
   } else {
     // Generic / Rely / 2-10 format: find header row (contains "Claim"), detect claim and amount columns
     let headerIdx = -1;
@@ -1120,6 +1151,7 @@ const BANK_CO_MAP = {
   'Rely':           'Rely Home Warranty',
   '2-10':           '2-10 Home Buyers Warranty',
   'Old Republic':   'Old Republic',
+  'Lula':           'Lula',
 };
 function pullBankRow(cb, i) {
   cb.closest('label').style.opacity = cb.checked ? '0.4' : '1';
@@ -1314,6 +1346,16 @@ function parseRemittance(remit, company) {
         if (!isNaN(paid) && paid > 0) items.push({ref: invNum, amount: paid});
       }
     }
+  } else if (co.includes('lula')) {
+    // Lula: tab-separated "WO#\tAmount" lines from Excel upload
+    lines.forEach(line => {
+      const parts = line.split('\t');
+      if (parts.length < 2) return;
+      const wo = parts[0].trim();
+      if (!wo || /claim/i.test(wo)) return; // skip header row
+      const amt = parseFloat(parts[parts.length - 1].replace(/[$,\s]/g, ''));
+      if (!isNaN(amt) && amt > 0) items.push({ref: wo, amount: amt});
+    });
   } else if (co.includes('old republic')) {
     // Old Republic: tab-separated, Work Order (NNNN-NNNN) col 0, Amount col 1
     // Check # appears in col ~4 of first data row only; extracted separately by autoExtractRef
@@ -1385,6 +1427,12 @@ function lookupJobber(ref, company, secondaryRef) {
       const matchKey = Object.keys(jobberMap).find(k => !k.startsWith('inv:') && k.includes(wcn));
       if (matchKey) return bestMatch(jobberMap[matchKey]);
     }
+  }
+
+  // Lula: WO# (e.g. D06545F) may appear as substring of Jobber Subject
+  if (coLower.includes('lula')) {
+    const matchKey = Object.keys(jobberMap).find(k => !k.startsWith('inv:') && k.includes(ref));
+    if (matchKey) return bestMatch(jobberMap[matchKey]);
   }
 
   // Case-insensitive fallback
@@ -1668,6 +1716,56 @@ function renderReport(results) {
   const blocks = results.map(r => {
     const hasIssues = r.discrepancies>0;
     const sorted = r.line_items;
+
+    let tableSection;
+    if (sorted.length === 0) {
+      tableSection = '<div style="padding:.75rem 1rem;font-size:12px;color:var(--amber);font-family:\'IBM Plex Mono\',monospace">⚠ No invoice found in Jobber — payment received but nothing to apply</div>';
+    } else {
+      const rowsHtml = sorted.map(i => {
+        const diff = i.difference||0;
+        const rowCls = i.status==='missing'?'tr-missing':Math.abs(diff)>0.01?'tr-discrep':'';
+        const matchBadge = i.status==='missing'?'<span class="badge b-missing">✗ No Invoice</span>':
+          i.status==='draft'?'<span class="badge b-draft">⚠ Draft</span>':
+          i.status==='deduction'?'<span class="badge b-adjustment">⚠ Adjustment</span>':
+          i.status==='shortpay'?'<span class="badge b-shortpay">⚠ Short Pay</span>':
+          i.status==='overpay'?'<span class="badge b-overpay">⚠ Over Pay</span>':
+          i.status==='already_paid'?'<span class="badge b-match">✓ Already Paid</span>':
+          '<span class="badge b-match">✓ Match</span>';
+        const statusBadge = i.jobber_status
+          ? '<span class="badge '+(i.jobber_status==='Draft'?'b-draft':i.jobber_status==='Paid'?'b-match':i.jobber_status==='Past Due'?'b-shortpay':'b-pastdue')+'">'+i.jobber_status+'</span>'
+          : '<span style="color:var(--text-muted)">—</span>';
+        const applyAmt = (i.status==='overpay'?i.jobber_amount:Math.abs(i.remittance_amount)).toFixed(2);
+        const applyControls = i.jobber_invoice && (i.status==='match'||i.status==='overpay'||i.status==='shortpay')
+          ? '<input type="number" step="0.01" id="amo-'+i.jobber_invoice+'" value="'+applyAmt+'" data-default="'+applyAmt+'" oninput="this.style.borderColor=parseFloat(this.value).toFixed(2)!==this.dataset.default?\'var(--amber)\':\'var(--border)\'" style="width:72px;background:var(--surface);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:\'IBM Plex Mono\',monospace;font-size:11px;padding:3px 5px;text-align:right">'
+            + '<button class="btn-apply btn-apply-one" onclick="applyOne(\''+i.jobber_invoice+'\',null,\''+(r.ref||'').replace(/'/g,'')+'\',this)" '+(isBlocked(r)?'disabled':'')+'>Apply</button>'
+          : '';
+        return '<tr class="'+rowCls+'">'
+          +'<td style="font-family:\'IBM Plex Mono\',monospace;font-size:10px;color:var(--text-muted)">'+(i.ref||'—')+'</td>'
+          +'<td class="amt" style="font-weight:600">'+(i.jobber_invoice?'#'+i.jobber_invoice:'<span style="color:var(--text-muted)">—</span>')+'</td>'
+          +'<td>'+statusBadge+'</td>'
+          +'<td class="amt" style="text-align:right">'+fmt(i.remittance_amount)+'</td>'
+          +'<td class="amt" style="text-align:right">'+(i.jobber_amount?fmt(i.jobber_amount):'—')+'</td>'
+          +'<td class="amt" style="text-align:right;color:'+(Math.abs(diff)>0.01?'var(--amber)':'var(--text-muted)')+'">'+( Math.abs(diff)>0.01?fmt(Math.abs(diff)):'—')+'</td>'
+          +'<td style="display:flex;align-items:center;gap:6px">'+matchBadge+applyControls+'</td>'
+          +'</tr>';
+      }).join('');
+      const totalDiff = Math.abs((r.total_invoiced||0)-(r.total_paid||0));
+      tableSection = '<div class="tbl-wrap"><table>'
+        +'<thead><tr>'
+        +'<th>Claim / WO #</th><th>Invoice #</th><th>Invoice Status</th>'
+        +'<th style="text-align:right">Paid ($)</th><th style="text-align:right">Invoiced ($)</th>'
+        +'<th style="text-align:right">Diff ($)</th><th>Match</th>'
+        +'</tr></thead>'
+        +'<tbody>'+rowsHtml
+        +'<tr class="tr-total">'
+        +'<td colspan="2">TOTALS · '+sorted.length+' claims</td><td></td>'
+        +'<td class="amt" style="text-align:right">'+fmt(r.total_paid)+'</td>'
+        +'<td class="amt" style="text-align:right">'+fmt(r.total_invoiced)+'</td>'
+        +'<td class="amt" style="text-align:right;color:var(--amber)">'+(totalDiff>0.01?fmt(totalDiff):'—')+'</td>'
+        +'<td>'+(r.total_paid===r.total_invoiced?'<span style="color:var(--green)">✅ Balanced</span>':'<span style="color:var(--amber)">⚠ Review</span>')+'</td>'
+        +'</tr></tbody></table></div>';
+    }
+
     return `
     <div class="pblock">
       <div class="pblock-head">
@@ -1680,56 +1778,14 @@ function renderReport(results) {
         </div>
         <div class="pblock-right">
           <div class="pblock-amount">${fmt(r.total_paid)}</div>
-          <div class="pblock-status" style="color:${r.total_paid===r.total_invoiced?'var(--green)':'var(--amber)'}">
-            ${r.total_paid===r.total_invoiced?'✓ Balanced':'⚠ Invoiced: '+fmt(r.total_invoiced)}
+          <div class="pblock-status" style="color:${sorted.length===0?'var(--amber)':r.total_paid===r.total_invoiced?'var(--green)':'var(--amber)'}">
+            ${sorted.length===0?'⚠ No invoice in Jobber':r.total_paid===r.total_invoiced?'✓ Balanced':'⚠ Invoiced: '+fmt(r.total_invoiced)}
           </div>
         </div>
       </div>
       ${hasIssues?`<div class="pblock-warn">⚠ ${r.discrepancies} discrepanc${r.discrepancies===1?'y':'ies'} — review before applying payment</div>`:''}
       ${renderApplyBar(r)}
-      <div class="tbl-wrap">
-        <table>
-          <thead><tr>
-            <th>Claim / WO #</th>
-            <th>Invoice #</th>
-            <th>Invoice Status</th>
-            <th style="text-align:right">Paid ($)</th>
-            <th style="text-align:right">Invoiced ($)</th>
-            <th style="text-align:right">Diff ($)</th>
-            <th>Match</th>
-          </tr></thead>
-          <tbody>
-            ${sorted.map(i=>{
-              const diff = i.difference||0;
-              const rowCls = i.status==='missing'?'tr-missing':Math.abs(diff)>0.01?'tr-discrep':'';
-              const matchBadge = i.status==='missing'?'<span class="badge b-missing">✗ No Invoice</span>':
-                i.status==='draft'?'<span class="badge b-draft">⚠ Draft</span>':
-                i.status==='deduction'?'<span class="badge b-adjustment">⚠ Adjustment</span>':
-                i.status==='shortpay'?'<span class="badge b-shortpay">⚠ Short Pay</span>':
-                i.status==='overpay'?'<span class="badge b-overpay">⚠ Over Pay</span>':
-                i.status==='already_paid'?'<span class="badge b-match">✓ Already Paid</span>':
-                '<span class="badge b-match">✓ Match</span>';
-              return `<tr class="${rowCls}">
-                <td style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--text-muted)">${i.ref||'—'}</td>
-                <td class="amt" style="font-weight:600">${i.jobber_invoice?'#'+i.jobber_invoice:'<span style="color:var(--text-muted)">—</span>'}</td>
-                <td>${i.jobber_status?`<span class="badge ${i.jobber_status==='Draft'?'b-draft':i.jobber_status==='Paid'?'b-match':i.jobber_status==='Past Due'?'b-shortpay':'b-pastdue'}">${i.jobber_status}</span>`:'<span style="color:var(--text-muted)">—</span>'}</td>
-                <td class="amt" style="text-align:right">${fmt(i.remittance_amount)}</td>
-                <td class="amt" style="text-align:right">${i.jobber_amount?fmt(i.jobber_amount):'—'}</td>
-                <td class="amt" style="text-align:right;color:${Math.abs(diff)>0.01?'var(--amber)':'var(--text-muted)'}">${Math.abs(diff)>0.01?fmt(Math.abs(diff)):'—'}</td>
-                <td style="display:flex;align-items:center;gap:6px">${matchBadge}${i.jobber_invoice&&(i.status==='match'||i.status==='overpay'||i.status==='shortpay')?`<input type="number" step="0.01" id="amo-${i.jobber_invoice}" value="${(i.status==='overpay'?i.jobber_amount:Math.abs(i.remittance_amount)).toFixed(2)}" data-default="${(i.status==='overpay'?i.jobber_amount:Math.abs(i.remittance_amount)).toFixed(2)}" oninput="this.style.borderColor=parseFloat(this.value).toFixed(2)!==this.dataset.default?'var(--amber)':'var(--border)'" style="width:72px;background:var(--surface);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:'IBM Plex Mono',monospace;font-size:11px;padding:3px 5px;text-align:right"><button class="btn-apply btn-apply-one" onclick="applyOne('${i.jobber_invoice}',null,'${(r.ref||'').replace(/'/g,'')}',this)" ${isBlocked(r)?'disabled':''}>Apply</button>`:''}</td>
-              </tr>`;
-            }).join('')}
-            <tr class="tr-total">
-              <td colspan="2">TOTALS · ${sorted.length} claims</td>
-              <td></td>
-              <td class="amt" style="text-align:right">${fmt(r.total_paid)}</td>
-              <td class="amt" style="text-align:right">${fmt(r.total_invoiced)}</td>
-              <td class="amt" style="text-align:right;color:var(--amber)">${Math.abs((r.total_invoiced||0)-(r.total_paid||0))>0.01?fmt(Math.abs((r.total_invoiced||0)-(r.total_paid||0))):'—'}</td>
-              <td>${r.total_paid===r.total_invoiced?'<span style="color:var(--green)">✅ Balanced</span>':'<span style="color:var(--amber)">⚠ Review</span>'}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+      ${tableSection}
     </div>`;
   }).join('');
 
