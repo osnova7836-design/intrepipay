@@ -35,7 +35,9 @@
       "PowerShell(Resolve-DnsName *)",
       "PowerShell(nslookup *)",
       "PowerShell(Get-ChildItem D:\\\\intrepipay -Name | Where-Object { $_ -match \"deploy|Makefile|Dockerfile|\\\\.sh$|nginx|caddy|pm2|ecosystem\" })",
-      "PowerShell(Invoke-WebRequest -Uri \"http://127.0.0.1:9222/json/version\" -UseBasicParsing -TimeoutSec 3 | Select-Object -ExpandProperty Content)"
+      "PowerShell(Invoke-WebRequest -Uri \"http://127.0.0.1:9222/json/version\" -UseBasicParsing -TimeoutSec 3 | Select-Object -ExpandProperty Content)",
+      "Bash(npm uninstall *)",
+      "Bash(curl -s http://localhost:3000)"
     ]
   }
 }
