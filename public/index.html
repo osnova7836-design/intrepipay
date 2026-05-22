@@ -1162,14 +1162,15 @@ function parseRemittance(remit, company) {
       }
     }
   } else if (co.includes('rheem')) {
-    // Rheem: Document Reference Number (WCN), may be comma-separated pairs
+    // Rheem: Document Reference Number (WCN), may be multiple WCNs on one line for the same invoice.
+    // One line = one invoice at the full line amount; first WCN is the match key.
     lines.forEach(line => {
       const wcns = line.match(/\b(260\d{7,8})\b/g);
       const amtMatch = line.match(/\$?([\d,]+\.?\d{2})/g);
       if (wcns&&amtMatch) {
         const amt = parseFloat(amtMatch[amtMatch.length-1].replace(/[$,]/g,''));
         if (!isNaN(amt)&&amt>0) {
-          wcns.forEach(w => items.push({ref:w, amount:amt/wcns.length, secondary_ref:wcns.join(', ')}));
+          items.push({ref:wcns[0], amount:amt, secondary_ref:wcns.join(', ')});
         }
       }
     });
