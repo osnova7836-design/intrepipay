@@ -1716,7 +1716,7 @@ function renderReport(results) {
                 <td class="amt" style="text-align:right">${fmt(i.remittance_amount)}</td>
                 <td class="amt" style="text-align:right">${i.jobber_amount?fmt(i.jobber_amount):'—'}</td>
                 <td class="amt" style="text-align:right;color:${Math.abs(diff)>0.01?'var(--amber)':'var(--text-muted)'}">${Math.abs(diff)>0.01?fmt(Math.abs(diff)):'—'}</td>
-                <td style="display:flex;align-items:center;gap:6px">${matchBadge}${i.jobber_invoice&&(i.status==='match'||i.status==='overpay')?`<input type="number" step="0.01" id="amo-${i.jobber_invoice}" value="${(i.status==='overpay'?i.jobber_amount:Math.abs(i.remittance_amount)).toFixed(2)}" data-default="${(i.status==='overpay'?i.jobber_amount:Math.abs(i.remittance_amount)).toFixed(2)}" oninput="this.style.borderColor=parseFloat(this.value).toFixed(2)!==this.dataset.default?'var(--amber)':'var(--border)'" style="width:72px;background:var(--surface);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:'IBM Plex Mono',monospace;font-size:11px;padding:3px 5px;text-align:right"><button class="btn-apply btn-apply-one" onclick="applyOne('${i.jobber_invoice}',null,'${(r.ref||'').replace(/'/g,'')}',this)" ${isBlocked(r)?'disabled':''}>Apply</button>`:''}</td>
+                <td style="display:flex;align-items:center;gap:6px">${matchBadge}${i.jobber_invoice&&(i.status==='match'||i.status==='overpay'||i.status==='shortpay')?`<input type="number" step="0.01" id="amo-${i.jobber_invoice}" value="${(i.status==='overpay'?i.jobber_amount:Math.abs(i.remittance_amount)).toFixed(2)}" data-default="${(i.status==='overpay'?i.jobber_amount:Math.abs(i.remittance_amount)).toFixed(2)}" oninput="this.style.borderColor=parseFloat(this.value).toFixed(2)!==this.dataset.default?'var(--amber)':'var(--border)'" style="width:72px;background:var(--surface);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:'IBM Plex Mono',monospace;font-size:11px;padding:3px 5px;text-align:right"><button class="btn-apply btn-apply-one" onclick="applyOne('${i.jobber_invoice}',null,'${(r.ref||'').replace(/'/g,'')}',this)" ${isBlocked(r)?'disabled':''}>Apply</button>`:''}</td>
               </tr>`;
             }).join('')}
             <tr class="tr-total">
@@ -2403,10 +2403,38 @@ async function applyAll(ref, co, btn) {
   if (!clientDbId) { alert('Could not determine client ID.'); return; }
 
   const skipNote = skippedPaid > 0 ? ` — ${skippedPaid} already Paid, skipped` : '';
-  confirmPaymentDate(paymentDate, invoiceDbIds.length, date => {
-    const params = new URLSearchParams({ clientId: clientDbId, invoiceIds: invoiceDbIds.join(','), type: payType, ref: ref || '', date });
-    streamPayment(params, btn, invoiceNumbers);
-  }, skipNote);
+  const hasShortpay = matchedItems.some(i => i.status === 'shortpay');
+
+  if (hasShortpay) {
+    // Partial payment present — use per-item API with explicit amounts so paid amount is recorded, not invoice total
+    confirmPaymentDate(paymentDate, matchedItems.length, async date => {
+      btn.disabled = true; btn.textContent = '⟳ Applying...';
+      try {
+        const lineItemsForAPI = matchedItems.map(i => ({
+          invoiceNumber: i.jobber_invoice,
+          amount: i.status === 'overpay' ? i.jobber_amount : Math.abs(i.remittance_amount)
+        }));
+        const resp = await fetch('/api/apply-all-payments', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ lineItems: lineItemsForAPI, paymentRef: ref || '', paymentDate: date })
+        });
+        const data = await resp.json();
+        if (data.succeeded > 0) markInvoicesPaid(invoiceNumbers);
+        btn.textContent = data.failed > 0
+          ? `⚠ ${data.succeeded} applied, ${data.failed} failed`
+          : `✓ Applied ${data.succeeded}`;
+      } catch(e) {
+        btn.disabled = false; btn.textContent = '▶ Apply all payments';
+        alert('Error: ' + e.message);
+      }
+    }, skipNote);
+  } else {
+    confirmPaymentDate(paymentDate, invoiceDbIds.length, date => {
+      const params = new URLSearchParams({ clientId: clientDbId, invoiceIds: invoiceDbIds.join(','), type: payType, ref: ref || '', date });
+      streamPayment(params, btn, invoiceNumbers);
+    }, skipNote);
+  }
 }
 </script>
 </body>
