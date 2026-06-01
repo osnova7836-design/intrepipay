@@ -1137,6 +1137,66 @@ function _parseExcelSheet(wb, sheetName) {
   return {co, ref: refIsSheetName ? '' : ref, amt, date: payDate, remit: remitLines.join('\n')};
 }
 
+// ── AI extraction fallback for unrecognised Excel formats ─────────────────────
+async function aiExtractRemittance(wb, sheetName) {
+  const apiKey = window._apiKey || '';
+  if (!apiKey) return null;
+  const ws = wb.Sheets[sheetName];
+  const csv = XLSX.utils.sheet_to_csv(ws, {FS: ','});
+  if (!csv.trim()) return null;
+  try {
+    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 1024,
+        system: 'You are a payment remittance parser for a home services plumbing business. Extract structured data from any payer format. Respond ONLY with valid JSON — no prose, no markdown fences.',
+        messages: [{role: 'user', content:
+          'Extract from this remittance CSV:\n' +
+          '- company: payer name (best guess)\n' +
+          '- ref: check/payment/ACH number (string)\n' +
+          '- date: payment date as YYYY-MM-DD\n' +
+          '- total: total payment amount (number)\n' +
+          '- line_items: [{work_order, amount}] — one per WO/claim/invoice line; skip header and total rows; negative for deductions\n\n' +
+          'CSV:\n' + csv.substring(0, 3000) + '\n\nJSON:'
+        }]
+      })
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    const raw = (data.content||[]).map(b=>b.text||'').join('').trim();
+    let clean = raw;
+    const s = clean.indexOf('{'), e = clean.lastIndexOf('}');
+    if (s >= 0 && e > s) clean = clean.substring(s, e+1);
+    const parsed = JSON.parse(clean);
+    if (!parsed.line_items || parsed.line_items.length === 0) return null;
+    const remitLines = ['Claim #\tAmount'];
+    parsed.line_items.forEach(item => {
+      const wo = String(item.work_order||'').trim();
+      const amt = parseFloat(item.amount);
+      if (wo && !isNaN(amt) && amt !== 0) remitLines.push(wo + '\t' + amt.toFixed(2));
+    });
+    if (remitLines.length <= 1) return null;
+    console.log('[AI extract]', sheetName, '→', parsed.company, '| ref:', parsed.ref, '| lines:', remitLines.length-1);
+    return {
+      co:    parsed.company || 'Unknown',
+      ref:   String(parsed.ref || '').trim(),
+      amt:   parsed.total ? '$' + parseFloat(parsed.total).toFixed(2) : '',
+      date:  parsed.date  || '',
+      remit: remitLines.join('\n')
+    };
+  } catch(e) {
+    console.warn('[AI extract] failed:', e.message);
+    return null;
+  }
+}
+
 // ── Multi-tab Excel upload ────────────────────────────────────────────────────
 async function loadMultiTab(input) {
   const file = input.files[0]; if (!file) return;
@@ -1151,9 +1211,13 @@ async function loadMultiTab(input) {
     const sheets = wb.SheetNames;
     const newPayments = [];
 
-    sheets.forEach(sheetName => {
-      const result = _parseExcelSheet(wb, sheetName);
-      if (!result) return;
+    for (const sheetName of sheets) {
+      let result = _parseExcelSheet(wb, sheetName);
+      if (!result && window._apiKey) {
+        el('mt-title').textContent = '⟳ AI parsing ' + file.name + '...';
+        result = await aiExtractRemittance(wb, sheetName);
+      }
+      if (!result) continue;
       newPayments.push({
         id: uid(),
         co: result.co,
@@ -1164,7 +1228,7 @@ async function loadMultiTab(input) {
         src: 'csv',
         fromSheet: sheetName
       });
-    });
+    }
 
     payments.push(...newPayments);
     renderChips();
