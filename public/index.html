@@ -742,7 +742,7 @@ async function loadMPDF(input) {
     }
     if (!el('m-ref').value) {
       const refM = mPDF.match(/\bCheck\s*#\s*[:\-]?\s*([A-Z0-9\-]{3,20})/i)
-                || mPDF.match(/\bPayment\s*(?:ID|#)\s*[:\-]?\s*([A-Z0-9\-]{3,20})/i)
+                || mPDF.match(/\bPayment\s*(?:ID|#|Number)\s*[:\-]?\s*([A-Z0-9\-]{3,20})/i)
                 || mPDF.match(/\bTransaction\s*(?:ID|#)\s*[:\-]?\s*([A-Z0-9\-]{3,20})/i)
                 || mPDF.match(/\bRef(?:erence)?\s*#?\s*[:\-]\s*([A-Z0-9\-]{3,20})/i);
       if (refM) el('m-ref').value = refM[1];
@@ -763,7 +763,7 @@ function _parseExcelSheet(wb, sheetName) {
   let headerRowIdx = 0;
   for (let ri = 1; ri < Math.min(5, rows.length); ri++) {
     const rc = rows[ri].map(c=>String(c||'').toLowerCase());
-    if (rc.some(c=>c.includes('work order')||c==='wo #'||c==='wo#'||c.includes('invoice #')||c.includes('claim')||c==='check')) {
+    if (rc.some(c=>c.includes('work order')||c==='wo #'||c==='wo#'||c==='wo'||c.includes('invoice #')||c.includes('claim')||c==='check')) {
       headerRowIdx = ri; break;
     }
   }
@@ -784,11 +784,14 @@ function _parseExcelSheet(wb, sheetName) {
   else if (row0.some(c=>c.includes('payment method')) && row0.some(c=>c.includes('payment total'))) co = 'Cinch Home Services';
   else if (row0.some(c=>c.includes('payout id')) || row0.some(c=>c.includes('related jobs'))) co = 'Lula';
 
-  // Full-scan fallback: company name not in first rows (Rheem uses generic SAP header; FA uses "EFT Payment Report")
+  // Full-scan fallback: company name not in first rows
   if (co === 'Rely Home Warranty') {
     const fullText = rows.map(r => r.map(c=>String(c||'')).join('\t')).join('\n');
     if (/document reference number/i.test(fullText) || /\b260\d{7,8}\b/.test(fullText)) co = 'Rheem';
     else if (/\bEFTPY\d+\b/i.test(fullText) || /\bFALCON\b/i.test(fullText)) co = 'First American / FALCON';
+    else if (/check\s*number/i.test(fullText) && /work\s*order/i.test(fullText)) co = 'Old Republic';
+    else if (/payment\s*number/i.test(fullText) && /payment\s*date/i.test(fullText) && /\bwo\b/i.test(fullText)) co = '2-10 Home Buyers Warranty';
+    else if (/\bRelated Jobs\b/i.test(fullText) || /\bTotal Payout\b/i.test(fullText)) co = 'Lula';
   }
 
   console.log('[_parseExcelSheet]', sheetName, '→ co:', co, '| headerRow:', headerRowIdx, '| cols:', row0.filter(c=>c).join(' | '));
@@ -898,9 +901,20 @@ function _parseExcelSheet(wb, sheetName) {
     const checkCol = row0.findIndex(c=>c.includes('check'));
     const dateCol  = row0.findIndex(c=>c==='date');
     const totalCol = row0.findIndex(c=>c==='total');
+    // ORHP key-value header: "Check Number"/"Check Date" in rows above the data header
+    rows.slice(0, headerRowIdx).forEach(row => {
+      const label = String(row[0]||'').toLowerCase().trim();
+      const val   = String(row[1]||'').trim();
+      if (/check\s*(?:number|#)/.test(label) && val && !ref) ref = val;
+      if (/check\s*date/.test(label) && val && !payDate) {
+        const mdy = val.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+        if (mdy) payDate = `${mdy[3]}-${mdy[1].padStart(2,'0')}-${mdy[2].padStart(2,'0')}`;
+      }
+    });
     rows.slice(headerRowIdx + 1).forEach(row => {
       const wo = String(row[woCol>=0?woCol:0]||'').trim();
-      if (!/^\d{4}-\d{4}$/.test(wo)) return;
+      if (!wo || /^total$/i.test(wo)) return;
+      if (!/^\d{4}-\d{4}$/.test(wo) && !/^\d{4,8}[A-Z]?$/i.test(wo)) return;
       if (!ref && checkCol>=0 && row[checkCol]) ref='Check #'+String(row[checkCol]);
       if (!amt && totalCol>=0 && row[totalCol]!=null) { const total=parseFloat(String(row[totalCol]).replace(/[$,]/g,'')); if (!isNaN(total)&&total>0) amt='$'+total.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); }
       if (!payDate && dateCol>=0 && row[dateCol]!=null) {
@@ -910,9 +924,10 @@ function _parseExcelSheet(wb, sheetName) {
       }
       const rawAmt=row[amtCol>=0?amtCol:1];
       const amount=parseFloat(String(rawAmt||'').replace(/[$,]/g,''));
-      if (isNaN(amount)||amount<=0) return;
+      if (isNaN(amount)||amount===0) return;
       remitLines.push(wo+'\t'+amount.toFixed(2));
     });
+    if (!amt && remitLines.length > 1) { const total=remitLines.slice(1).reduce((s,l)=>s+(parseFloat(l.split('\t')[1])||0),0); if (total>0) amt='$'+total.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); }
     if (!ref) ref=sheetName;
   } else if (co === 'Rheem') {
     // SAP-style EFT Excel: key/value header section, then "Remittance Detail" table
@@ -1005,31 +1020,74 @@ function _parseExcelSheet(wb, sheetName) {
     }
     console.log('[FirstAmerican]', sheetName, '→ ref:', ref, '| amt:', amt, '| payDate:', payDate, '| woCol:', woCol, '| netPaidCol:', netPaidCol, '| lines:', remitLines.length-1);
   } else if (co === 'Lula') {
-    // Lula payout Excel: one header row + one data row per payout
-    // Columns: PAYOUT ID | RELATED JOBS | JOBS TOTAL | DEDUCTIONS | TOTAL PAYOUT | STATUS | PAYOUT DATE
+    const monthMap = {january:1,february:2,march:3,april:4,may:5,june:6,july:7,august:8,september:9,october:10,november:11,december:12};
     const payoutIdCol    = row0.findIndex(c => c.includes('payout id'));
     const relatedJobsCol = row0.findIndex(c => c.includes('related jobs'));
     const totalPayoutCol = row0.findIndex(c => c.includes('total payout'));
     const payoutDateCol  = row0.findIndex(c => c.includes('payout date'));
-    const monthMap = {january:1,february:2,march:3,april:4,may:5,june:6,july:7,august:8,september:9,october:10,november:11,december:12};
+    const jobsIdCol      = row0.findIndex(c => c === 'jobs id' || c.includes('jobs id'));
     let runningTotal = 0;
-    rows.slice(headerRowIdx + 1).forEach(row => {
-      if (!row) return;
-      if (!ref && payoutIdCol >= 0 && row[payoutIdCol]) ref = String(row[payoutIdCol]).trim();
-      if (!payDate && payoutDateCol >= 0 && row[payoutDateCol]) {
-        const ds = String(row[payoutDateCol]);
-        const dm = ds.match(/([A-Za-z]+)\s+(\d{1,2}),\s+(\d{4})/);
-        if (dm) { const mo = monthMap[dm[1].toLowerCase()]; if (mo) payDate = `${dm[3]}-${String(mo).padStart(2,'0')}-${String(dm[2]).padStart(2,'0')}`; }
+
+    if (payoutIdCol >= 0 || relatedJobsCol >= 0) {
+      // Standard export: header row + data rows (PAYOUT ID | RELATED JOBS | TOTAL PAYOUT | PAYOUT DATE)
+      rows.slice(headerRowIdx + 1).forEach(row => {
+        if (!row) return;
+        if (!ref && payoutIdCol >= 0 && row[payoutIdCol]) ref = String(row[payoutIdCol]).trim();
+        if (!payDate && payoutDateCol >= 0 && row[payoutDateCol]) {
+          const ds = String(row[payoutDateCol]);
+          const dm = ds.match(/([A-Za-z]+)\s+(\d{1,2}),\s+(\d{4})/);
+          if (dm) { const mo = monthMap[dm[1].toLowerCase()]; if (mo) payDate = `${dm[3]}-${String(mo).padStart(2,'0')}-${String(dm[2]).padStart(2,'0')}`; }
+        }
+        const woRaw  = relatedJobsCol >= 0 ? row[relatedJobsCol] : null;
+        const amtRaw = totalPayoutCol >= 0 ? row[totalPayoutCol] : null;
+        if (!woRaw || amtRaw == null) return;
+        const wo = String(woRaw).trim();
+        const amount = parseFloat(String(amtRaw).replace(/[$,\s]/g, ''));
+        if (!wo || isNaN(amount) || amount <= 0) return;
+        remitLines.push(wo + '\t' + amount.toFixed(2));
+        runningTotal += amount;
+      });
+    } else if (jobsIdCol >= 0) {
+      // Jobs-detail format: header "Jobs ID / Service Category / ..." then job rows, then payout/deductions section
+      rows.slice(headerRowIdx + 1).forEach(row => {
+        if (!row) return;
+        const cell0 = String(row[0]||'').trim();
+        if (/^(payout info|jobs total|deductions|total payout)$/i.test(cell0)) return;
+        const wo = String(row[jobsIdCol]||'').trim();
+        if (wo && /^[A-Z0-9]{5,10}$/i.test(wo) && !ref) ref = wo;
+        if (!payDate) {
+          const dm = String(row[4]||'').match(/([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})/);
+          if (dm) { const mo = monthMap[dm[1].toLowerCase()]; if (mo) payDate = `${dm[3]}-${String(mo).padStart(2,'0')}-${String(dm[2]).padStart(2,'0')}`; }
+        }
+      });
+      // Net payout is in the row immediately following "Total Payout" label
+      for (let ri = 0; ri < rows.length - 1; ri++) {
+        if (/^total\s*payout$/i.test(String(rows[ri]?.[0]||'').trim())) {
+          const v = parseFloat(String(rows[ri+1]?.[0]||'').replace(/[$,]/g,''));
+          if (!isNaN(v) && v > 0) { runningTotal = v; amt = '$' + v.toFixed(2); }
+          break;
+        }
       }
-      const woRaw  = relatedJobsCol >= 0 ? row[relatedJobsCol] : null;
-      const amtRaw = totalPayoutCol >= 0 ? row[totalPayoutCol] : null;
-      if (!woRaw || amtRaw == null) return;
-      const wo = String(woRaw).trim();
-      const amount = parseFloat(String(amtRaw).replace(/[$,\s]/g, ''));
-      if (!wo || isNaN(amount) || amount <= 0) return;
-      remitLines.push(wo + '\t' + amount.toFixed(2));
-      runningTotal += amount;
-    });
+      if (ref && runningTotal > 0) remitLines.push(ref + '\t' + runningTotal.toFixed(2));
+    } else {
+      // Compact payout export: data in row 0 (no header), text blob in row 1
+      // Columns: [PAYOUT_ID, JOB_ID, JOBS_TOTAL, DEDUCTIONS, TOTAL_PAYOUT, DATE, STATUS]
+      rows.forEach(row => {
+        if (!row || row.length < 5) return;
+        const payoutId = String(row[0]||'').trim();
+        const jobId    = String(row[1]||'').trim();
+        if (!/^[A-Z0-9]{5,10}$/i.test(payoutId) || !/^[A-Z0-9]{5,10}$/i.test(jobId)) return;
+        const amtRaw  = row[4];
+        const dateRaw = String(row[5]||'');
+        if (!ref) ref = payoutId;
+        const amount = parseFloat(String(amtRaw).replace(/[$,\s]/g,''));
+        if (isNaN(amount) || amount <= 0) return;
+        const dm = dateRaw.match(/([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})/);
+        if (dm && !payDate) { const mo = monthMap[dm[1].toLowerCase()]; if (mo) payDate = `${dm[3]}-${String(mo).padStart(2,'0')}-${String(dm[2]).padStart(2,'0')}`; }
+        remitLines.push(jobId + '\t' + amount.toFixed(2));
+        runningTotal += amount;
+      });
+    }
     if (!amt && runningTotal > 0) amt = '$' + runningTotal.toFixed(2);
     console.log('[Lula]', sheetName, '→ ref:', ref, '| amt:', amt, '| payDate:', payDate, '| lines:', remitLines.length-1);
   } else {
@@ -1054,7 +1112,24 @@ function _parseExcelSheet(wb, sheetName) {
       if (total > 0) amt = '$' + total.toFixed(2);
     }
     console.log('[Rely/2-10]', sheetName, '→ co:', co, '| lines:', remitLines.length-1, '| amt:', amt);
-    // Leave ref blank — applyRef in findBankMatch will set the real bank ACH ID from the description
+    // 2-10: extract payment number, date, and total from the key-value header rows
+    // Row 0 = labels (Payment Date / Payment Number / Total), Row 1 = values
+    if (co === '2-10 Home Buyers Warranty' && headerRowIdx > 0) {
+      const labelRow = (rows[0]||[]).map(c => String(c||'').toLowerCase().trim());
+      const valRow   = rows[1] || [];
+      labelRow.forEach((label, idx) => {
+        const val = valRow[idx];
+        if (val == null) return;
+        if (label.includes('payment number') && !ref) ref = String(val).trim();
+        if (label.includes('payment date') && !payDate) {
+          const v = String(val).trim();
+          const mdy = v.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+          if (mdy) payDate = `${mdy[3]}-${mdy[1].padStart(2,'0')}-${mdy[2].padStart(2,'0')}`;
+        }
+        if (label === 'total' && !amt) { const v = parseFloat(String(val)); if (!isNaN(v) && v > 0) amt = '$' + v.toFixed(2); }
+      });
+    }
+    // Leave ref blank for non-2-10 — applyRef in findBankMatch will set the real bank ACH ID
   }
 
   if (!ref) { ref = sheetName; refIsSheetName = true; }
@@ -1252,18 +1327,27 @@ function parseRemittance(remit, company) {
       }
     });
   } else if (co.includes('cinch')) {
-    // Cinch: SCC# (SCCV...) in Payment method column; amount follows it in the line.
-    // Search after the SCC# to avoid date digits or WO# bleeding into the amount.
-    lines.forEach(line => {
-      const scc = line.match(/\b(SCCV[A-Z0-9]+-\d+)\b/i);
-      if (!scc) return;
-      const afterSCC = line.slice(line.indexOf(scc[1]) + scc[1].length);
-      const amt = afterSCC.match(/\$?([\d,]+\.\d{2})/g);
-      if (amt) {
-        const a = parseFloat(amt[amt.length-1].replace(/[$,]/g,''));
-        if (!isNaN(a)&&a>0) items.push({ref:scc[1], amount:a});
-      }
-    });
+    // Cinch Paymode/Bottomline PDF: "Paid Invoice Amount" appears BEFORE "Comments: SCCV..."
+    // in the text stream (different visual columns). Match each SCCV# with the nearest
+    // "Paid Invoice Amount" that precedes it by position.
+    const fullCinch = remit.replace(/\n/g, ' ');
+    const cinchAmts = [...fullCinch.matchAll(/Paid\s+Invoice\s+Amount\s*:?\s*([\d,]+\.\d{2})/gi)];
+    const cinchSccs = [...fullCinch.matchAll(/\b(SCCV[A-Z0-9]+-\d+)\b/gi)];
+    if (cinchSccs.length > 0 && cinchAmts.length > 0) {
+      cinchSccs.forEach(sccM => {
+        const prevAmt = cinchAmts.filter(a => a.index < sccM.index).pop();
+        if (prevAmt) { const a = parseFloat(prevAmt[1].replace(/,/g,'')); if (!isNaN(a)&&a>0) items.push({ref:sccM[1], amount:a}); }
+      });
+    } else {
+      // Fallback: CSV/Excel text where amount follows SCCV# on the same line
+      lines.forEach(line => {
+        const scc = line.match(/\b(SCCV[A-Z0-9]+-\d+)\b/i);
+        if (!scc) return;
+        const afterSCC = line.slice(line.indexOf(scc[1]) + scc[1].length);
+        const amt = afterSCC.match(/\$?([\d,]+\.\d{2})/g);
+        if (amt) { const a = parseFloat(amt[amt.length-1].replace(/[$,]/g,'')); if (!isNaN(a)&&a>0) items.push({ref:scc[1], amount:a}); }
+      });
+    }
   } else if (co.includes('frontdoor')) {
     const sep = lines[0]?.includes('\t') ? '\t' : ',';
     const hdr0 = lines[0] || '';
@@ -1400,9 +1484,11 @@ function lookupJobber(ref, company, secondaryRef) {
     );
   }
 
-  // All County: PDF invoice # matches Jobber invoice # directly
-  if (coLower.includes('all county')) {
-    return bestMatch(jobberMap['inv:'+ref]);
+  // All County / Old Republic: WO# is a Jobber invoice number
+  if (coLower.includes('all county') || coLower.includes('old republic')) {
+    const r = bestMatch(jobberMap['inv:'+ref]);
+    if (r) return r;
+    if (coLower.includes('all county')) return null;
   }
 
   // Direct subject match
