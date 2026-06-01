@@ -7,8 +7,8 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptDir  = "D:\intrepipay"
-$LogDir     = "D:\intrepipay\logs"
+$ScriptDir  = "D:\TrackPoint"
+$LogDir     = "D:\TrackPoint\logs"
 $LogFile    = "$LogDir\cookie-refresh.log"
 
 function Write-Log($msg) {

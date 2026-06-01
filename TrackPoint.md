@@ -1,4 +1,4 @@
-# TrackPoint OS — IntrepiPay Complete Settings & Context
+# TrackPoint OS — Complete Settings & Context
 
 *Compiled 2026-05-22*
 
@@ -6,12 +6,12 @@
 
 ## Project Overview
 
-IntrepiPay is a Node.js/Express web app for payment reconciliation aimed at home service businesses.
+TrackPoint is a Node.js/Express web app for payment reconciliation aimed at home service businesses.
 
 - **Entry point:** `server.js`
 - **Core dependencies:** `express`, `node-fetch@2`
 - **Playwright** added 2026-05-13 as a dev dependency to automate applying payments inside Jobber
-- **Project root:** `D:\intrepipay`
+- **Project root:** `D:\TrackPoint`
 - **Production URL:** https://intrepipay.com (hosted on Render: intrepipay.onrender.com)
 - **Cache-Control:** `server.js` sets `Cache-Control: no-store` on `.html` responses to prevent browser caching of `index.html`. If local edits appear stale despite hard-refresh, push to GitHub and let Render deploy — that bypasses all local browser/proxy cache.
 
@@ -45,7 +45,7 @@ The `!`-prefix in Claude Code runs through **Git Bash** (POSIX), NOT PowerShell.
 
 **Rules for `!`-prefix commands:**
 - Set env vars inline bash-style: `VAR='value' command ...`  (NOT `$env:VAR = 'value'; command`)
-- Use forward-slash paths: `/d/intrepipay/scripts/foo.js`  (NOT `D:\intrepipay\scripts\foo.js`)
+- Use forward-slash paths: `/d/TrackPoint/scripts/foo.js`  (NOT `D:\TrackPoint\scripts\foo.js`)
 - Single-quoted values preserve backslashes literally
 
 **Rules for PowerShell tool:** use `$env:VAR`, backslash paths are OK.
@@ -75,7 +75,7 @@ Allowed permissions (user-level):
 - `PowerShell(& "C:\Users\drcal\AppData\Roaming\npm\openclaw.cmd" browser list ...)`
 - `PowerShell(& "C:\Users\drcal\AppData\Roaming\npm\openclaw.cmd" browser tabs ...)`
 
-### Project settings (`D:\intrepipay\.claude\settings.local.json`)
+### Project settings (`D:\TrackPoint\.claude\settings.local.json`)
 Allowed permissions (project-level):
 - `Bash(PLAYWRIGHT_BROWSERS_PATH='D:\\playwright-browsers' node *)`
 - `Bash(node *)`
@@ -84,18 +84,18 @@ Allowed permissions (project-level):
 - `Bash(npx kill-port *)`
 - `Bash(curl -s http://localhost:3000/)`
 - `Bash(curl -s http://localhost:3000/api/invoices)`
-- `PowerShell(& "D:\\intrepipay\\scripts\\launch-chrome-debug.ps1")`
+- `PowerShell(& "D:\\TrackPoint\\scripts\\launch-chrome-debug.ps1")`
 - `PowerShell(Stop-Process *)`
 - `PowerShell(Get-Process *)`
 - `PowerShell(Get-NetTCPConnection *)`
 - `PowerShell(netstat *)`
-- `PowerShell(Get-ChildItem D:\\intrepipay ...)`
+- `PowerShell(Get-ChildItem D:\\TrackPoint ...)`
 - `PowerShell(Invoke-WebRequest ... http://localhost:3000 ...)`
 - `PowerShell(Invoke-WebRequest ... http://127.0.0.1:9222/json/version ...)`
 - `PowerShell(Resolve-DnsName *)`
 - `PowerShell(nslookup *)`
 - `PowerShell(Get-Content C:\\Windows\\System32\\drivers\\etc\\hosts ...)`
-- `PowerShell(powershell -ExecutionPolicy Bypass -File D:\\intrepipay\\scripts\\refresh-render-cookies.ps1)`
+- `PowerShell(powershell -ExecutionPolicy Bypass -File D:\\TrackPoint\\scripts\\refresh-render-cookies.ps1)`
 - `WebFetch(domain:intrepipay.onrender.com)`
 - `WebFetch(domain:intrepipay.com)`
 - `WebFetch(domain:developer.getjobber.com)`
