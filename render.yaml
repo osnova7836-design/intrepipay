@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: intrepipay
+    name: trackpoint
     env: node
     buildCommand: bash build.sh
     startCommand: node server.js
@@ -8,6 +8,8 @@ services:
     envVars:
       - key: PLAYWRIGHT_BROWSERS_PATH
         value: "0"
+      - key: COLLECTOR_URL
+        sync: false
 
   - type: web
     name: trackpoint-collector
