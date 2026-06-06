@@ -307,7 +307,7 @@ async function clickSubmit(page) {
   // waitForLoadState('load') returns immediately on an already-loaded SPA page,
   // masking submission failures. Wait for the URL to actually change instead.
   await Promise.all([
-    page.waitForURL(url => !url.includes('/payments/new'), { timeout: 30000 }),
+    page.waitForURL(url => !url.toString().includes('/payments/new'), { timeout: 30000 }),
     button.click(),
   ]);
 }
