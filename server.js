@@ -335,49 +335,20 @@ app.post('/api/add-line-item', async (req, res) => {
 app.post('/api/apply-payment', async (req, res) => {
   try {
     const token = await getValidToken();
-    const { invoiceNumber, amount, paymentRef, paymentDate } = req.body;
+    const { invoiceNumber, jobberGqlId, amount, paymentRef, paymentDate } = req.body;
 
     if (!invoiceNumber || !amount) {
       return res.status(400).json({ error: 'invoiceNumber and amount required' });
     }
 
-    // Look up invoice ID by invoice number
-    const lookupQuery = `{
-      invoices(filter: { invoiceNumber: { eq: ${invoiceNumber} } }) {
-        nodes {
-          id
-          invoiceNumber
-          total
-          invoiceStatus
-        }
-      }
-    }`;
-
-    const lookupResp = await fetch(GRAPHQL_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-        'X-JOBBER-GRAPHQL-VERSION': '2025-04-16'
-      },
-      body: JSON.stringify({ query: lookupQuery })
-    });
-
-    const lookupData = await lookupResp.json();
-
-    if (lookupData.errors) {
-      return res.status(400).json({ error: lookupData.errors });
-    }
-
-    const invoice = lookupData.data?.invoices?.nodes?.[0];
-    if (!invoice) {
-      return res.status(404).json({ error: `Invoice #${invoiceNumber} not found` });
+    if (!jobberGqlId) {
+      return res.status(400).json({ error: 'jobberGqlId is required — reconnect Jobber to refresh invoice data' });
     }
 
     // Apply payment via mutation
     const mutation = `mutation {
       invoicePaymentCreate(input: {
-        invoiceId: "${invoice.id}"
+        invoiceId: "${jobberGqlId}"
         amount: ${amount}
         paidAt: "${paymentDate}T00:00:00Z"
       }) {
@@ -439,6 +410,7 @@ app.post('/api/apply-all-payments', async (req, res) => {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             invoiceNumber: item.invoiceNumber,
+            jobberGqlId: item.jobberGqlId,
             amount: item.amount,
             paymentRef,
             paymentDate

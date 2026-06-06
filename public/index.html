@@ -2624,7 +2624,7 @@ async function applyOne(invoiceNumber, _unused, ref, btn) {
         const resp = await fetch('/api/apply-payment', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ invoiceNumber, amount: overrideAmt, paymentRef: confirmedRef || ref || '', paymentDate: date })
+          body: JSON.stringify({ invoiceNumber, jobberGqlId: row.jobberGqlId, amount: overrideAmt, paymentRef: confirmedRef || ref || '', paymentDate: date })
         });
         const data = await resp.json();
         if (data.success) {
@@ -2693,10 +2693,14 @@ async function applyAll(ref, co, btn) {
     confirmPaymentDate(paymentDate, matchedItems.length, async (date, confirmedRef) => {
       btn.disabled = true; btn.textContent = '⟳ Applying...';
       try {
-        const lineItemsForAPI = matchedItems.map(i => ({
-          invoiceNumber: i.jobber_invoice,
-          amount: i.status === 'overpay' ? i.jobber_amount : Math.abs(i.remittance_amount)
-        }));
+        const lineItemsForAPI = matchedItems.map(i => {
+          const r = jobberRows.find(r => String(r['Invoice #']).trim() === String(i.jobber_invoice).trim());
+          return {
+            invoiceNumber: i.jobber_invoice,
+            jobberGqlId: r?.jobberGqlId || '',
+            amount: i.status === 'overpay' ? i.jobber_amount : Math.abs(i.remittance_amount),
+          };
+        });
         const resp = await fetch('/api/apply-all-payments', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
