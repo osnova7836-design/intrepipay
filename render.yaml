@@ -8,3 +8,38 @@ services:
     envVars:
       - key: PLAYWRIGHT_BROWSERS_PATH
         value: "0"
+
+  - type: web
+    name: trackpoint-collector
+    env: node
+    rootDir: collector
+    buildCommand: npm install && npx playwright install chromium --with-deps
+    startCommand: node index.js
+    plan: standard
+    envVars:
+      - key: RELY_USERNAME
+        sync: false
+      - key: RELY_PASSWORD
+        sync: false
+      - key: LULA_USERNAME
+        sync: false
+      - key: LULA_PASSWORD
+        sync: false
+      - key: ORHP_USERNAME
+        sync: false
+      - key: ORHP_PASSWORD
+        sync: false
+      - key: TWO_TEN_USERNAME
+        sync: false
+      - key: TWO_TEN_PASSWORD
+        sync: false
+      - key: LESSEN_USERNAME
+        sync: false
+      - key: LESSEN_PASSWORD
+        sync: false
+      - key: GMAIL_CLIENT_ID
+        sync: false
+      - key: GMAIL_CLIENT_SECRET
+        sync: false
+      - key: GMAIL_REFRESH_TOKEN
+        sync: false

@@ -455,6 +455,9 @@ app.post('/api/apply-all-payments', async (req, res) => {
 
     const succeeded = results.filter(r => r.success).length;
     const failed = results.filter(r => r.error).length;
+    results.filter(r => r.error).forEach(r =>
+      console.error(`  ✗ Invoice #${r.invoiceNumber}: ${JSON.stringify(r.error)}`)
+    );
     console.log(`Apply all complete: ${succeeded} succeeded, ${failed} failed`);
     res.json({ results, succeeded, failed });
 
@@ -598,6 +601,23 @@ app.post('/api/queue-reset', (req, res) => {
   jobQueue.clear();
   playwrightRunning = false;
   res.json({ ok: true, message: 'Queue cleared and playwrightRunning reset to false' });
+});
+
+// ── Remittance collector proxy ────────────────────────────────────────────────
+app.post('/api/collect', async (req, res) => {
+  const collectorUrl = process.env.COLLECTOR_URL || 'http://localhost:3001';
+  const { companies, daysBack } = req.body || {};
+  try {
+    const resp = await fetch(`${collectorUrl}/collect`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ companies, daysBack }),
+    });
+    if (!resp.ok) throw new Error(`Collector responded ${resp.status}`);
+    res.json(await resp.json());
+  } catch (err) {
+    res.status(502).json({ error: `Collector unreachable: ${err.message}` });
+  }
 });
 
 // ── Local worker endpoints ────────────────────────────────────────────────────

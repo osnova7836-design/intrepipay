@@ -1,16 +1,17 @@
 {
-  "name": "trackpoint-os",
+  "name": "trackpoint-collector",
   "version": "1.0.0",
-  "description": "TrackPoint_OS — Payment reconciliation for home service businesses",
-  "main": "server.js",
+  "description": "Automated remittance collection for TrackPoint",
+  "main": "index.js",
   "scripts": {
-    "start": "node server.js",
+    "start": "node index.js",
     "install-browsers": "playwright install chromium"
   },
   "dependencies": {
     "dotenv": "^17.4.2",
     "express": "^4.18.2",
-    "node-fetch": "^2.7.0",
+    "googleapis": "^140.0.0",
+    "pdf-parse": "^1.1.1",
     "playwright": "^1.60.0",
     "xlsx": "^0.18.5"
   }

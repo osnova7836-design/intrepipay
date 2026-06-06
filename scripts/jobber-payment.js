@@ -175,6 +175,14 @@ async function fillTransactionDate(page, date) {
   await page.keyboard.type(`${month}/${day}/${year}`, { delay: 50 });
   await page.keyboard.press('Tab');
   await page.waitForTimeout(300);
+  // Dismiss the calendar if Tab alone didn't close it — open calendar blocks Save.
+  const calendarOpen = await page.evaluate(
+    () => !!document.querySelector('.react-datepicker-popper, [class*="datepicker"][class*="open"]')
+  );
+  if (calendarOpen) {
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(200);
+  }
 }
 
 // Scroll through Jobber's invoice list and click each needed checkbox as it
@@ -296,9 +304,12 @@ async function ensureInvoicesChecked(page, invoiceIds) {
 async function clickSubmit(page) {
   // Regex anchor ensures we match "Save" but not "Save and Email Receipt".
   const button = page.locator('button').filter({ hasText: /^\s*Save\s*$/ });
-  await button.click();
-  // Jobber's SPA keeps background connections open so networkidle never fires; 'load' is sufficient.
-  await page.waitForLoadState('load');
+  // waitForLoadState('load') returns immediately on an already-loaded SPA page,
+  // masking submission failures. Wait for the URL to actually change instead.
+  await Promise.all([
+    page.waitForURL(url => !url.includes('/payments/new'), { timeout: 30000 }),
+    button.click(),
+  ]);
 }
 
 // Fills and optionally submits one Jobber payment form for a single batch of invoices.

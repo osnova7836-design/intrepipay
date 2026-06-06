@@ -2,3 +2,11 @@ node_modules/
 .auth/
 .env
 .env.local
+tokens.json
+trackpoint.env
+*.orig
+*.png
+intercept-log.json
+logs/
+.collector-profile*/
+.collector-downloads/

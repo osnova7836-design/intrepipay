@@ -56,6 +56,9 @@ body{background:var(--bg);color:var(--text);font-family:'IBM Plex Sans',sans-ser
 .payment-chip-remove:hover{color:var(--red)}
 .add-btn{width:100%;padding:10px;border:1.5px dashed var(--border-strong);border-radius:8px;background:none;color:var(--text-dim);font-family:'IBM Plex Sans',sans-serif;font-size:12px;cursor:pointer;transition:all 0.15s;display:flex;align-items:center;justify-content:center;gap:6px}
 .add-btn:hover{border-color:var(--teal);color:var(--teal);background:var(--teal-bg)}
+.btn-collect{width:100%;padding:11px;border:none;border-radius:8px;background:var(--teal);color:#fff;font-family:'IBM Plex Mono',monospace;font-size:11px;font-weight:500;letter-spacing:0.06em;cursor:pointer;transition:background 0.15s;display:flex;align-items:center;justify-content:center;gap:6px;margin-bottom:.625rem}
+.btn-collect:hover{background:var(--teal-light)}
+.btn-collect:disabled{opacity:0.5;cursor:not-allowed}
 
 /* Buttons */
 .btn{padding:8px 16px;border-radius:6px;font-family:'IBM Plex Mono',monospace;font-size:11px;cursor:pointer;transition:all 0.15s;letter-spacing:0.06em;text-transform:uppercase;border:none;font-weight:500}
@@ -225,6 +228,13 @@ tr:hover td{background:var(--surface2)}
       <div class="step-header">
         <div class="step-num" id="s3">3</div>
         <div class="step-title">Payments to reconcile</div>
+      </div>
+      <button class="btn-collect" id="collect-btn" onclick="collectRemittances()">⚡ Collect remittances</button>
+      <div class="status-line" id="collect-status" style="margin-bottom:.5rem"></div>
+      <div style="display:flex;align-items:center;gap:8px;margin:.5rem 0">
+        <div style="flex:1;height:1px;background:var(--border)"></div>
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--text-muted)">or add manually</div>
+        <div style="flex:1;height:1px;background:var(--border)"></div>
       </div>
       <div class="upload-zone" id="mtz" style="margin-bottom:.625rem">
         <input type="file" accept=".xlsx,.xls" onchange="loadMultiTab(this)">
@@ -626,7 +636,7 @@ function getBankCo(desc) {
   if (d.includes('FRONTDOOR')) return 'Frontdoor';
   if (d.includes('CINCH')) return 'Cinch';
   if (d.includes('2-10')||d.includes('HOME BUYER')) return '2-10';
-  if (d.includes('OLD REPUBLIC')||d.includes('OLDREPUBLIC')) return 'Old Republic';
+  if (d.includes('OLD REPUBLIC')||d.includes('OLDREPUBLIC')||d.includes('ORHP')) return 'Old Republic';
   if (d.includes('RELY')) return 'Rely';
   if (d.includes('ALLCOUNTY')||d.includes('PL*ALLCOUNTY')) return 'All County';
   if (d.includes('LULA')) return 'Lula';
@@ -653,17 +663,22 @@ function loadMCSV(input) {
     }});
   } else {
     const rd=new FileReader();
-    rd.onload=e=>{
+    rd.onload=async e=>{
       const wb=XLSX.read(e.target.result,{type:'array',cellDates:true});
-      const result=_parseExcelSheet(wb,wb.SheetNames[0]);
+      let result=_parseExcelSheet(wb,wb.SheetNames[0]);
+      if (!result && window._apiKey) {
+        el('mc-title').textContent='⟳ AI parsing…';
+        result=await aiExtractRemittance(wb,wb.SheetNames[0]);
+      }
       if (result) {
         mCSV=result.remit;
         if (result.date) mDate=result.date;
         if (!el('m-co').value&&result.co) el('m-co').value=result.co;
         if (result.ref) el('m-ref').value=result.ref;
         if (!el('m-amt').value&&result.amt) el('m-amt').value=result.amt;
+        el('mc-title').textContent='✓ '+file.name;
       } else {
-        // Fallback: raw tab-separated CSV text
+        // Last resort: raw tab-separated CSV text
         mCSV=XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]],{FS:'\t'});
         _mCSVAutoFill(mCSV.split('\n')[0]||'');
       }
@@ -779,7 +794,7 @@ function _parseExcelSheet(wb, sheetName) {
   else if (row0.some(c=>c.includes('cinch'))) co = 'Cinch Home Services';
   else if (row0.some(c=>c.includes('frontdoor'))) co = 'Frontdoor';
   else if (row0.some(c=>c.includes('rheem'))) co = 'Rheem';
-  else if (row0.some(c=>c.includes('work order')) && row0.some(c=>c.includes('check'))) co = 'Old Republic';
+  else if (row0.some(c=>c.includes('work order')) && (row0.some(c=>c.includes('check')) || row0.some(c=>c.includes('payment reference')))) co = 'Old Republic';
   else if (row0.some(c=>c==='wo #'||c==='wo#') && row0.some(c=>c==='invoice #'||c==='invoice#')) co = 'Lessen';
   else if (row0.some(c=>c.includes('payment method')) && row0.some(c=>c.includes('payment total'))) co = 'Cinch Home Services';
   else if (row0.some(c=>c.includes('payout id')) || row0.some(c=>c.includes('related jobs'))) co = 'Lula';
@@ -789,7 +804,7 @@ function _parseExcelSheet(wb, sheetName) {
     const fullText = rows.map(r => r.map(c=>String(c||'')).join('\t')).join('\n');
     if (/document reference number/i.test(fullText) || /\b260\d{7,8}\b/.test(fullText)) co = 'Rheem';
     else if (/\bEFTPY\d+\b/i.test(fullText) || /\bFALCON\b/i.test(fullText)) co = 'First American / FALCON';
-    else if (/check\s*number/i.test(fullText) && /work\s*order/i.test(fullText)) co = 'Old Republic';
+    else if ((/check\s*number/i.test(fullText) || /payment\s*reference/i.test(fullText)) && /work\s*order/i.test(fullText)) co = 'Old Republic';
     else if (/payment\s*number/i.test(fullText) && /payment\s*date/i.test(fullText) && /\bwo\b/i.test(fullText)) co = '2-10 Home Buyers Warranty';
     else if (/\bRelated Jobs\b/i.test(fullText) || /\bTotal Payout\b/i.test(fullText)) co = 'Lula';
   }
@@ -899,8 +914,9 @@ function _parseExcelSheet(wb, sheetName) {
     const woCol    = row0.findIndex(c=>c.includes('work order'));
     const amtCol   = row0.findIndex(c=>c==='amount');
     const checkCol = row0.findIndex(c=>c.includes('check'));
-    const dateCol  = row0.findIndex(c=>c==='date');
+    const dateCol  = row0.findIndex(c=>c==='date' || c==='date paid');
     const totalCol = row0.findIndex(c=>c==='total');
+    const refCol   = row0.findIndex(c=>c.includes('payment reference'));
     // ORHP key-value header: "Check Number"/"Check Date" in rows above the data header
     rows.slice(0, headerRowIdx).forEach(row => {
       const label = String(row[0]||'').toLowerCase().trim();
@@ -915,6 +931,7 @@ function _parseExcelSheet(wb, sheetName) {
       const wo = String(row[woCol>=0?woCol:0]||'').trim();
       if (!wo || /^total$/i.test(wo)) return;
       if (!/^\d{4}-\d{4}$/.test(wo) && !/^\d{4,8}[A-Z]?$/i.test(wo)) return;
+      if (!ref && refCol>=0 && row[refCol]) ref=String(row[refCol]).trim();
       if (!ref && checkCol>=0 && row[checkCol]) ref='Check #'+String(row[checkCol]);
       if (!amt && totalCol>=0 && row[totalCol]!=null) { const total=parseFloat(String(row[totalCol]).replace(/[$,]/g,'')); if (!isNaN(total)&&total>0) amt='$'+total.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); }
       if (!payDate && dateCol>=0 && row[dateCol]!=null) {
@@ -927,7 +944,7 @@ function _parseExcelSheet(wb, sheetName) {
       if (isNaN(amount)||amount===0) return;
       remitLines.push(wo+'\t'+amount.toFixed(2));
     });
-    if (!amt && remitLines.length > 1) { const total=remitLines.slice(1).reduce((s,l)=>s+(parseFloat(l.split('\t')[1])||0),0); if (total>0) amt='$'+total.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+    if (!amt && remitLines.length > 0) { const total=remitLines.reduce((s,l)=>s+(parseFloat(l.split('\t')[1])||0),0); if (total>0) amt='$'+total.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); }
     if (!ref) ref=sheetName;
   } else if (co === 'Rheem') {
     // SAP-style EFT Excel: key/value header section, then "Remittance Detail" table
@@ -1213,7 +1230,8 @@ async function loadMultiTab(input) {
 
     for (const sheetName of sheets) {
       let result = _parseExcelSheet(wb, sheetName);
-      if (!result && window._apiKey) {
+      const noLines = result && result.remit.split('\n').length <= 1;
+      if ((!result || noLines) && window._apiKey) {
         el('mt-title').textContent = '⟳ AI parsing ' + file.name + '...';
         result = await aiExtractRemittance(wb, sheetName);
       }
@@ -1315,6 +1333,45 @@ function addPayment() {
   if (!remit&&!co) { alert('Please add a remittance or select a company.'); return; }
   payments.push({id:uid(), co, ref, amt, remit, src:modalSrc, date:mDate||''});
   renderChips(); closeModal(); checkReady();
+}
+
+async function collectRemittances() {
+  const btn = el('collect-btn');
+  const status = el('collect-status');
+  btn.disabled = true;
+  btn.textContent = '⏳ Collecting...';
+  status.textContent = '';
+  try {
+    const resp = await fetch('/api/collect', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({daysBack: 30}),
+    });
+    const data = await resp.json();
+    if (data.error) throw new Error(data.error);
+    const newPayments = data.results.map(r => ({
+      id: uid(),
+      co: r.company,
+      ref: r.paymentRef,
+      amt: String(r.amount),
+      date: r.paymentDate,
+      workOrders: r.workOrders,
+      remit: null,
+      src: 'collector',
+    }));
+    payments.push(...newPayments);
+    renderChips(); checkReady();
+    const errCount = Object.keys(data.errors||{}).length;
+    const errMsg = errCount ? ` · ${errCount} source${errCount>1?'s':''} failed` : '';
+    status.textContent = `Collected ${data.total} payment${data.total!==1?'s':''} from ${data.results.length} source${data.results.length!==1?'s':''}${errMsg}`;
+    status.style.color = errCount ? 'var(--yellow)' : 'var(--teal)';
+  } catch(err) {
+    status.textContent = 'Collection failed: ' + err.message;
+    status.style.color = 'var(--red)';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '⚡ Collect remittances';
+  }
 }
 function removePayment(id) { payments=payments.filter(p=>p.id!==id); renderChips(); checkReady(); }
 function renderChips() {
@@ -1649,7 +1706,9 @@ function findBankMatch(payment, computedTotal=0) {
 
 // ── Main matching function ────────────────────────────────────────────────────
 function matchPayment(payment) {
-  const items = parseRemittance(payment.remit, payment.co);
+  const items = payment.workOrders
+    ? payment.workOrders.map(wo => ({ref: wo.workOrder, amount: wo.amount, isDeduction: wo.amount < 0}))
+    : parseRemittance(payment.remit, payment.co);
   const computedTotal = items.reduce((s,i)=>s+Math.abs(i.amount),0);
   const matchedTxn = findBankMatch(payment, computedTotal);
   const bankMatch = matchedTxn ? fmtDate(matchedTxn.date)+' · '+matchedTxn.desc.substring(0,40)+' · '+fmt(matchedTxn.amount) : null;
@@ -2498,16 +2557,23 @@ function markInvoicesPaid(invoiceNumbers) {
   });
 }
 
-function confirmPaymentDate(paymentDate, count, onConfirm, skipNote = '') {
+function confirmPaymentDate(paymentDate, count, onConfirm, skipNote = '', initialRef = '') {
+  const needsRef = !initialRef;
   const overlay = document.createElement('div');
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:300;display:flex;align-items:center;justify-content:center;padding:1rem';
   overlay.innerHTML = `
     <div style="background:#1c1917;border-radius:12px;padding:1.5rem;width:100%;max-width:360px;box-shadow:0 8px 32px rgba(0,0,0,0.4)">
-      <div style="font-family:'Playfair Display',serif;font-size:17px;font-weight:700;margin-bottom:1rem">Confirm payment date</div>
+      <div style="font-family:'Playfair Display',serif;font-size:17px;font-weight:700;margin-bottom:1rem">Confirm payment</div>
+      ${needsRef ? `
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--amber);margin-bottom:.4rem">CHECK / REF # (required — not found in remittance)</div>
+      <input type="text" id="confirm-ref" placeholder="Enter check or reference number"
+        style="background:var(--surface);border:1px solid var(--amber);border-radius:6px;color:var(--text);font-family:'IBM Plex Mono',monospace;font-size:13px;padding:8px 10px;width:100%;margin-bottom:1rem">
+      ` : ''}
       <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--text-muted);margin-bottom:.5rem">DATE (edit if wrong before confirming)</div>
       <input type="date" id="confirm-date" value="${paymentDate}"
         style="background:var(--surface);border:1px solid var(--teal);border-radius:6px;color:var(--text);font-family:'IBM Plex Mono',monospace;font-size:14px;padding:8px 10px;width:100%;margin-bottom:1.25rem">
       <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--text-muted);margin-bottom:1rem">Applying to ${count} invoice${count!==1?'s':''}${skipNote}.</div>
+      <div id="confirm-err" style="display:none;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#f87171;margin-bottom:.75rem"></div>
       <div style="display:flex;gap:8px;justify-content:flex-end">
         <button onclick="this.closest('[style*=fixed]').remove()"
           style="padding:7px 14px;border-radius:6px;font-family:'IBM Plex Mono',monospace;font-size:10px;cursor:pointer;letter-spacing:0.06em;text-transform:uppercase;border:1px solid rgba(255,255,255,0.2);background:transparent;color:var(--text)">Cancel</button>
@@ -2516,10 +2582,21 @@ function confirmPaymentDate(paymentDate, count, onConfirm, skipNote = '') {
       </div>
     </div>`;
   document.body.appendChild(overlay);
+  if (needsRef) overlay.querySelector('#confirm-ref').focus();
   overlay.querySelector('#confirm-ok').onclick = () => {
-    const confirmed = overlay.querySelector('#confirm-date').value || paymentDate;
+    const confirmedDate = overlay.querySelector('#confirm-date').value || paymentDate;
+    const confirmedRef = needsRef
+      ? (overlay.querySelector('#confirm-ref').value || '').trim()
+      : initialRef;
+    if (!confirmedRef) {
+      const err = overlay.querySelector('#confirm-err');
+      err.textContent = 'Check / reference number is required for QuickBooks matching.';
+      err.style.display = '';
+      overlay.querySelector('#confirm-ref').focus();
+      return;
+    }
     overlay.remove();
-    onConfirm(confirmed);
+    onConfirm(confirmedDate, confirmedRef);
   };
 }
 
@@ -2541,13 +2618,13 @@ async function applyOne(invoiceNumber, _unused, ref, btn) {
   const isOverride = amtInput && amtInput.value && parseFloat(amtInput.value).toFixed(2) !== amtInput.dataset.default;
 
   if (isOverride && overrideAmt > 0) {
-    confirmPaymentDate(paymentDate, 1, async date => {
+    confirmPaymentDate(paymentDate, 1, async (date, confirmedRef) => {
       btn.disabled = true; btn.textContent = '⟳';
       try {
         const resp = await fetch('/api/apply-payment', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ invoiceNumber, amount: overrideAmt, paymentRef: ref || '', paymentDate: date })
+          body: JSON.stringify({ invoiceNumber, amount: overrideAmt, paymentRef: confirmedRef || ref || '', paymentDate: date })
         });
         const data = await resp.json();
         if (data.success) {
@@ -2561,12 +2638,12 @@ async function applyOne(invoiceNumber, _unused, ref, btn) {
         btn.disabled = false; btn.textContent = 'Apply';
         alert('Error: ' + e.message);
       }
-    });
+    }, '', ref);
   } else {
-    confirmPaymentDate(paymentDate, 1, date => {
-      const params = new URLSearchParams({ clientId: row.clientDbId, invoiceIds: row.jobberDbId, type: payType, ref: ref || '', date });
+    confirmPaymentDate(paymentDate, 1, (date, confirmedRef) => {
+      const params = new URLSearchParams({ clientId: row.clientDbId, invoiceIds: row.jobberDbId, type: payType, ref: confirmedRef, date });
       streamPayment(params, btn, [invoiceNumber]);
-    });
+    }, '', ref);
   }
 }
 
@@ -2613,7 +2690,7 @@ async function applyAll(ref, co, btn) {
 
   if (hasShortpay) {
     // Partial payment present — use per-item API with explicit amounts so paid amount is recorded, not invoice total
-    confirmPaymentDate(paymentDate, matchedItems.length, async date => {
+    confirmPaymentDate(paymentDate, matchedItems.length, async (date, confirmedRef) => {
       btn.disabled = true; btn.textContent = '⟳ Applying...';
       try {
         const lineItemsForAPI = matchedItems.map(i => ({
@@ -2623,7 +2700,7 @@ async function applyAll(ref, co, btn) {
         const resp = await fetch('/api/apply-all-payments', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ lineItems: lineItemsForAPI, paymentRef: ref || '', paymentDate: date })
+          body: JSON.stringify({ lineItems: lineItemsForAPI, paymentRef: confirmedRef, paymentDate: date })
         });
         const data = await resp.json();
         if (data.succeeded > 0) markInvoicesPaid(invoiceNumbers);
@@ -2634,12 +2711,12 @@ async function applyAll(ref, co, btn) {
         btn.disabled = false; btn.textContent = '▶ Apply all payments';
         alert('Error: ' + e.message);
       }
-    }, skipNote);
+    }, skipNote, ref);
   } else {
-    confirmPaymentDate(paymentDate, invoiceDbIds.length, date => {
-      const params = new URLSearchParams({ clientId: clientDbId, invoiceIds: invoiceDbIds.join(','), type: payType, ref: ref || '', date });
+    confirmPaymentDate(paymentDate, invoiceDbIds.length, (date, confirmedRef) => {
+      const params = new URLSearchParams({ clientId: clientDbId, invoiceIds: invoiceDbIds.join(','), type: payType, ref: confirmedRef, date });
       streamPayment(params, btn, invoiceNumbers);
-    }, skipNote);
+    }, skipNote, ref);
   }
 }
 </script>
