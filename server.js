@@ -368,7 +368,7 @@ app.post('/api/apply-payment', async (req, res) => {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${token}`,
-        'X-JOBBER-GRAPHQL-VERSION': '2025-04-16'
+        'X-JOBBER-GRAPHQL-VERSION': '2024-11-15'
       },
       body: JSON.stringify({ query: mutation })
     });
