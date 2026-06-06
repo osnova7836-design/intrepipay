@@ -457,7 +457,7 @@ app.get('/api/playwright-payment', async (req, res) => {
     res.end();
     return;
   }
-  const { clientId, invoiceIds, type, ref, date } = req.query;
+  const { clientId, invoiceIds, type, ref, date, amount } = req.query;
   if (!clientId || !invoiceIds || !type || !date) {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
@@ -479,7 +479,7 @@ app.get('/api/playwright-payment', async (req, res) => {
   // On Render: queue for local worker. Locally: run Playwright directly.
   if (process.env.RENDER) {
     const ids = invoiceIds.split(',').map(s => s.trim()).filter(Boolean);
-    const jobId = createJob({ clientId, invoiceIds: ids, type, ref, date });
+    const jobId = createJob({ clientId, invoiceIds: ids, type, ref, date, amount: amount ? parseFloat(amount) : null });
     send({ type: 'log', text: `Job ${jobId} queued — waiting for local worker to pick up...` });
     console.log(`Job ${jobId} queued: clientId=${clientId} invoiceIds=${ids.join(',')} date=${date}`);
 
@@ -527,7 +527,7 @@ app.get('/api/playwright-payment', async (req, res) => {
     if (batchCount > 1) {
       send({ type: 'log', text: `${ids.length} invoices → ${batchCount} batches of up to 50 (Jobber limit).` });
     }
-    await applyJobberPayment({ clientId, invoiceIds: ids, type, ref, date, submit: true });
+    await applyJobberPayment({ clientId, invoiceIds: ids, type, ref, date, amount: amount ? parseFloat(amount) : null, submit: true });
     send({ type: 'done', success: true });
   } catch (err) {
     send({ type: 'done', success: false, error: err.message });

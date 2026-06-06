@@ -2689,32 +2689,13 @@ async function applyAll(ref, co, btn) {
   const hasShortpay = matchedItems.some(i => i.status === 'shortpay');
 
   if (hasShortpay) {
-    // Partial payment present — use per-item API with explicit amounts so paid amount is recorded, not invoice total
-    confirmPaymentDate(paymentDate, matchedItems.length, async (date, confirmedRef) => {
-      btn.disabled = true; btn.textContent = '⟳ Applying...';
-      try {
-        const lineItemsForAPI = matchedItems.map(i => {
-          const r = jobberRows.find(r => String(r['Invoice #']).trim() === String(i.jobber_invoice).trim());
-          return {
-            invoiceNumber: i.jobber_invoice,
-            jobberGqlId: r?.jobberGqlId || '',
-            amount: i.status === 'overpay' ? i.jobber_amount : Math.abs(i.remittance_amount),
-          };
-        });
-        const resp = await fetch('/api/apply-all-payments', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ lineItems: lineItemsForAPI, paymentRef: confirmedRef, paymentDate: date })
-        });
-        const data = await resp.json();
-        if (data.succeeded > 0) markInvoicesPaid(invoiceNumbers);
-        btn.textContent = data.failed > 0
-          ? `⚠ ${data.succeeded} applied, ${data.failed} failed`
-          : `✓ Applied ${data.succeeded}`;
-      } catch(e) {
-        btn.disabled = false; btn.textContent = '▶ Apply all payments';
-        alert('Error: ' + e.message);
-      }
+    // Shortpay: use Playwright path with total remittance amount instead of invoice totals
+    confirmPaymentDate(paymentDate, invoiceDbIds.length, (date, confirmedRef) => {
+      const totalAmount = matchedItems.reduce((sum, i) =>
+        sum + (i.status === 'overpay' ? i.jobber_amount : Math.abs(i.remittance_amount)), 0
+      );
+      const params = new URLSearchParams({ clientId: clientDbId, invoiceIds: invoiceDbIds.join(','), type: payType, ref: confirmedRef, date, amount: totalAmount.toFixed(2) });
+      streamPayment(params, btn, invoiceNumbers);
     }, skipNote, ref);
   } else {
     confirmPaymentDate(paymentDate, invoiceDbIds.length, (date, confirmedRef) => {

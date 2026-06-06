@@ -314,7 +314,16 @@ async function clickSubmit(page) {
 
 // Fills and optionally submits one Jobber payment form for a single batch of invoices.
 // The caller is responsible for opening and closing the page.
-async function applyJobberPaymentBatch(page, { clientId, invoiceIds, type, ref, date, submit, navigateOnly }) {
+async function fillAmount(page, amount) {
+  // Find the amount input in the "Create a Payment Record" section
+  const field = page.getByLabel(/^amount$/i).first();
+  await field.click({ clickCount: 3 });
+  await page.keyboard.type(String(amount), { delay: 50 });
+  await page.keyboard.press('Tab');
+  await page.waitForTimeout(300);
+}
+
+async function applyJobberPaymentBatch(page, { clientId, invoiceIds, type, ref, date, amount, submit, navigateOnly }) {
   const url = buildPaymentUrl({ clientId, invoiceIds });
   console.log(`Navigating to ${url}`);
   await page.goto(url, { waitUntil: 'load' });
@@ -354,6 +363,11 @@ async function applyJobberPaymentBatch(page, { clientId, invoiceIds, type, ref, 
   console.log(`Filling transaction date "${date}"`);
   await fillTransactionDate(page, date);
 
+  if (amount !== undefined && amount !== null) {
+    console.log(`Overriding payment amount to ${amount}`);
+    await fillAmount(page, amount);
+  }
+
   if (submit) {
     console.log('Submitting payment...');
     await clickSubmit(page);
@@ -372,6 +386,7 @@ async function applyJobberPayment({
   type,
   ref,
   date,
+  amount = null,
   submit = false,
   headless = false,
   navigateOnly = false,
@@ -408,7 +423,7 @@ async function applyJobberPayment({
         const page = await ctx.newPage();
         let leaveOpen = false;
         try {
-          await applyJobberPaymentBatch(page, { clientId, invoiceIds: batch, type, ref, date, submit, navigateOnly });
+          await applyJobberPaymentBatch(page, { clientId, invoiceIds: batch, type, ref, date, amount, submit, navigateOnly });
           if (submit && isLast) {
             leaveOpen = true;
             console.log('Jobber confirmation page left open in Chrome.');
@@ -438,7 +453,7 @@ async function applyJobberPayment({
       }
       const page = await ctx.newPage();
       try {
-        await applyJobberPaymentBatch(page, { clientId, invoiceIds: batch, type, ref, date, submit, navigateOnly });
+        await applyJobberPaymentBatch(page, { clientId, invoiceIds: batch, type, ref, date, amount, submit, navigateOnly });
       } finally {
         await page.close();
       }
