@@ -600,21 +600,52 @@ app.post('/api/queue-reset', (req, res) => {
   res.json({ ok: true, message: 'Queue cleared and playwrightRunning reset to false' });
 });
 
-// ── Remittance collector proxy ────────────────────────────────────────────────
-app.post('/api/collect', async (req, res) => {
-  const collectorUrl = process.env.COLLECTOR_URL || 'http://localhost:3001';
-  const { companies, daysBack } = req.body || {};
+// ── Remittance collector (inline) ────────────────────────────────────────────
+const collectorSources = (() => {
   try {
-    const resp = await fetch(`${collectorUrl}/collect`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ companies, daysBack }),
-    });
-    if (!resp.ok) throw new Error(`Collector responded ${resp.status}`);
-    res.json(await resp.json());
-  } catch (err) {
-    res.status(502).json({ error: `Collector unreachable: ${err.message}` });
+    return {
+      rely:             require('./collector/sources/rely'),
+      lula:             require('./collector/sources/lula'),
+      orhp:             require('./collector/sources/orhp'),
+      'two-ten':        require('./collector/sources/two-ten'),
+      rheem:            require('./collector/sources/rheem'),
+      'first-american': require('./collector/sources/first-american'),
+      lessen:           require('./collector/sources/lessen'),
+    };
+  } catch (e) {
+    console.warn('Collector sources not available:', e.message);
+    return null;
   }
+})();
+
+app.post('/api/collect', async (req, res) => {
+  if (!collectorSources) {
+    return res.status(503).json({ error: 'Collector sources not available on this server.' });
+  }
+  const { companies, daysBack = 30 } = req.body || {};
+  const targets = companies?.length
+    ? companies.filter(c => collectorSources[c])
+    : Object.keys(collectorSources);
+
+  console.log(`[collector] Running: ${targets.join(', ')} (daysBack=${daysBack})`);
+
+  const allResults = [];
+  const errors = {};
+
+  for (const name of targets) {
+    console.log(`[collector] Starting ${name}...`);
+    try {
+      const results = await collectorSources[name].collect({ daysBack });
+      allResults.push(...results);
+      console.log(`[collector] ${name}: ${results.length} payments`);
+    } catch (err) {
+      console.error(`[collector] ${name} FAILED: ${err.message}`);
+      errors[name] = err.message;
+    }
+  }
+
+  console.log(`[collector] Done. Total: ${allResults.length}, errors: ${Object.keys(errors).length}`);
+  res.json({ results: allResults, errors, total: allResults.length });
 });
 
 // ── Local worker endpoints ────────────────────────────────────────────────────

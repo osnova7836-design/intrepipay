@@ -1365,9 +1365,11 @@ async function collectRemittances() {
     const errMsg = errCount ? ` · ${errCount} source${errCount>1?'s':''} failed` : '';
     status.textContent = `Collected ${data.total} payment${data.total!==1?'s':''} from ${data.results.length} source${data.results.length!==1?'s':''}${errMsg}`;
     status.style.color = errCount ? 'var(--yellow)' : 'var(--teal)';
+    status.style.display = 'block';
   } catch(err) {
     status.textContent = 'Collection failed: ' + err.message;
     status.style.color = 'var(--red)';
+    status.style.display = 'block';
   } finally {
     btn.disabled = false;
     btn.textContent = '⚡ Collect remittances';
