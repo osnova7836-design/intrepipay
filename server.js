@@ -374,6 +374,7 @@ app.post('/api/apply-payment', async (req, res) => {
     });
 
     const mutData = await mutResp.json();
+    console.log(`invoicePaymentCreate raw response:`, JSON.stringify(mutData).substring(0, 500));
 
     if (mutData.errors) {
       return res.status(400).json({ error: mutData.errors });
@@ -384,7 +385,13 @@ app.post('/api/apply-payment', async (req, res) => {
       return res.status(400).json({ error: userErrors.map(e => e.message).join(', ') });
     }
 
-    console.log(`Payment applied: Invoice #${invoiceNumber} · $${amount} · Ref: ${paymentRef} · Date: ${paymentDate}`);
+    const createdPayment = mutData.data?.invoicePaymentCreate?.invoicePayment;
+    if (!createdPayment?.id) {
+      console.error(`invoicePaymentCreate returned no payment — full response:`, JSON.stringify(mutData));
+      return res.status(400).json({ error: 'Jobber accepted the request but did not create a payment record. Check Render logs.' });
+    }
+
+    console.log(`Payment applied: Invoice #${invoiceNumber} · $${amount} · Ref: ${paymentRef} · Date: ${paymentDate} · Payment ID: ${createdPayment.id}`);
     res.json({ success: true, invoiceNumber, amount });
 
   } catch (err) {
