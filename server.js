@@ -544,7 +544,24 @@ app.get('/api/playwright-payment', async (req, res) => {
 app.get('/api/jobber-schema', async (req, res) => {
   try {
     const token = await getValidToken();
-    // Introspect InvoiceEditInput to find valid line-item field names
+    const mutationQuery = `{ mutations: __schema { mutationType { fields { name } } } }`;
+
+    // Probe multiple API versions to find which have invoicePaymentCreate
+    const versionsToProbe = ['2025-04-16','2024-09-30','2024-08-01','2024-04-05','2023-11-15','2023-08-23'];
+    const versionResults = {};
+    for (const v of versionsToProbe) {
+      const r = await fetch(GRAPHQL_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}`, 'X-JOBBER-GRAPHQL-VERSION': v },
+        body: JSON.stringify({ query: mutationQuery })
+      });
+      const d = await r.json();
+      if (d.message) { versionResults[v] = `invalid: ${d.message}`; continue; }
+      const names = d.data?.mutations?.mutationType?.fields?.map(f => f.name) || [];
+      versionResults[v] = names.filter(n => /pay/i.test(n));
+    }
+
+    // Also introspect InvoiceEditInput on current version
     const query = `{
       invoiceEditInput: __type(name: "InvoiceEditInput") {
         inputFields { name type { name kind ofType { name kind } } }
@@ -561,7 +578,7 @@ app.get('/api/jobber-schema', async (req, res) => {
     const allMutations = data.data?.mutations?.mutationType?.fields?.map(f => f.name) || [];
     const lineItemMutations = allMutations.filter(n => /line|item|invoice/i.test(n));
     const paymentMutations = allMutations.filter(n => /pay/i.test(n));
-    res.json({ invoiceEditInputFields: inputFields, lineItemMutations, paymentMutations });
+    res.json({ versionResults, invoiceEditInputFields: inputFields, lineItemMutations, paymentMutations });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
