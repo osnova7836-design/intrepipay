@@ -46,7 +46,7 @@ async function log(jobId, text) {
 
 async function runJob(job) {
   const { id, params } = job;
-  const { clientId, invoiceIds, type, ref, date } = params;
+  const { clientId, invoiceIds, type, ref, date, amount } = params;
 
   console.log(`\n=== Job ${id} received ===`);
   console.log(`  clientId:   ${clientId}`);
@@ -64,6 +64,7 @@ async function runJob(job) {
       type,
       ref,
       date,
+      amount: amount ?? null,
       submit: true,
       onLog: text => log(id, text),
     });
