@@ -1592,14 +1592,16 @@ function lookupJobber(ref, company, secondaryRef) {
   // Helper: pick best row from candidates by client name match, then highest invoice #
   function bestMatch(rows) {
     if (!rows || rows.length === 0) return null;
-    if (rows.length === 1) return rows[0];
     const coKeywords = coLower.split(/[\s\/\-]+/).filter(w => w.length > 3);
-    const clientMatch = rows.find(row => {
-      const client = String(row['Client name']||'').toLowerCase();
-      return coKeywords.some(kw => client.includes(kw));
-    });
-    if (clientMatch) return clientMatch;
-    // Fallback: highest (most recent) invoice number
+    if (coKeywords.length > 0) {
+      const clientMatches = rows.filter(row => {
+        const client = String(row['Client name']||'').toLowerCase();
+        return coKeywords.some(kw => client.includes(kw));
+      });
+      if (clientMatches.length === 0) return null;
+      rows = clientMatches;
+    }
+    if (rows.length === 1) return rows[0];
     return rows.reduce((best, row) =>
       parseInt(row['Invoice #']||0) > parseInt(best['Invoice #']||0) ? row : best
     );
