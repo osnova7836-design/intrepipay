@@ -553,7 +553,8 @@ app.get('/api/jobber-schema', async (req, res) => {
     const inputFields = data.data?.invoiceEditInput?.inputFields?.map(f => f.name) || [];
     const allMutations = data.data?.mutations?.mutationType?.fields?.map(f => f.name) || [];
     const lineItemMutations = allMutations.filter(n => /line|item|invoice/i.test(n));
-    res.json({ invoiceEditInputFields: inputFields, lineItemMutations });
+    const paymentMutations = allMutations.filter(n => /pay/i.test(n));
+    res.json({ invoiceEditInputFields: inputFields, lineItemMutations, paymentMutations });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
