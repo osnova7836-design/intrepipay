@@ -7,90 +7,133 @@
   const ACCOUNT_ID = '149';
   const BASE = `https://qbo.intuit.com/api/neo/v1/company/${COMPANY_ID}/olb/ng`;
 
-  // ─── Parsing ────────────────────────────────────────────────────────────────
+  // ─── Transaction type detection ──────────────────────────────────────────────
+
+  // 1st American sends an EFTPY code in QB that never matches their bank ACH ID.
+  // Detect them so we skip ref matching and fall back to name-only.
+  const IS_1ST_AMERICAN = /1ST\s*AME(?:RICAN)?|FIRST\s+AMERICAN/i;
 
   function parseDesc(orig, desc) {
     const raw = orig || desc || '';
 
-    // ATM / Mobile batch deposit — cannot be individually matched
-    if (/BKOFAMERICA\s+(ATM|MOBILE)\s+/i.test(raw)) {
-      return { type: 'BATCH', ref: null, name: null };
+    // ATM batch — multiple checks, no individual detail
+    if (/BKOFAMERICA\s+ATM\s+/i.test(raw)) {
+      return { type: 'ATM_BATCH', ref: null, name: null };
     }
 
-    // Zelle: "Zelle payment from NAME for "..."; Conf# CODE"
+    // Mobile deposit — single check, but BofA never sends the check number
+    if (/BKOFAMERICA\s+MOBILE\s+/i.test(raw)) {
+      return { type: 'MOBILE_CHECK', ref: null, name: null };
+    }
+
+    // Zelle — conf code and sender name are always in origDescription
     const zelle = raw.match(/Zelle payment from\s+(.+?)(?:\s+for\s+"[^"]*")?\s*;?\s*Conf#\s*([A-Z0-9]+)/i);
     if (zelle) {
       return { type: 'ZELLE', ref: zelle[2].toUpperCase(), name: zelle[1].trim() };
     }
 
-    // Individual check: leading number (check #) followed by a name
-    const check = raw.match(/^(\d{1,6})\s+([A-Za-z][A-Za-z\s\-'.]{1,30})/);
-    if (check) {
-      return { type: 'CHECK', ref: check[1], name: check[2].trim() };
+    // Company ACH — look for "DES:KEYWORD ID:VALUE" pattern
+    // The first ID after the DES tag is the payment ID that should match QB's refNum.
+    // Exception: 1st American uses an EFTPY code in QB that never matches the bank ID.
+    const desMatch = raw.match(/DES:\S+\s+ID:([A-Z0-9\-]+)/i);
+    if (desMatch) {
+      const companyMatch = raw.match(/^(.+?)\s+DES:/i);
+      const company = companyMatch ? companyMatch[1].trim() : raw.substring(0, 40);
+      const is1stAmerican = IS_1ST_AMERICAN.test(raw);
+      return {
+        type: 'COMPANY_ACH',
+        ref: is1stAmerican ? null : desMatch[1],
+        name: company,
+        is1stAmerican,
+      };
     }
 
-    // Company ACH / everything else — match by name
-    return { type: 'COMPANY', ref: null, name: desc || raw.substring(0, 50) };
-  }
-
-  function normRef(s) { return String(s || '').replace(/\W/g, '').toLowerCase(); }
-  function normName(s) { return (s || '').toLowerCase().replace(/[^a-z\s]/g, '').trim(); }
-
-  function nameMatch(qbName, parsedName) {
-    const qb = normName(qbName);
-    const words = normName(parsedName).split(/\s+/).filter(w => w.length > 2);
-    return words.some(w => qb.includes(w));
+    // Anything else (Rely wire, Old Republic batch, etc.) — name matching only
+    return { type: 'COMPANY', ref: null, name: desc || raw.substring(0, 60) };
   }
 
   // ─── Matching ───────────────────────────────────────────────────────────────
 
+  function normRef(s)  { return String(s || '').replace(/\W/g, '').toLowerCase(); }
+  function normName(s) { return (s || '').toLowerCase().replace(/[^a-z\s]/g, '').trim(); }
+
+  function nameMatch(qbName, parsedName) {
+    const qb    = normName(qbName);
+    const words = normName(parsedName).split(/\s+/).filter(w => w.length > 2);
+    return words.some(w => qb.includes(w));
+  }
+
   function findMatch(txn, parsed) {
     const sug = txn.suggestedMatches?.matchedTxns || [];
 
-    if (parsed.type === 'BATCH') return { s: null, conf: 'BATCH' };
+    if (parsed.type === 'ATM_BATCH')    return { s: null, conf: 'ATM_BATCH' };
 
-    if (parsed.type === 'CHECK' || parsed.type === 'ZELLE') {
-      // EXACT: ref AND name both agree
-      for (const s of sug) {
-        if (parsed.ref && normRef(s.refNum) === normRef(parsed.ref) && nameMatch(s.name, parsed.name))
-          return { s, conf: 'EXACT' };
-      }
-      // Ref matches but name mismatch — suspicious, needs review
-      for (const s of sug) {
-        if (parsed.ref && normRef(s.refNum) === normRef(parsed.ref))
-          return { s, conf: 'REF_ONLY' };
-      }
-      // Ref not found anywhere in suggestions — data entry problem in QB
-      if (parsed.ref) return { s: null, conf: 'REF_MISSING' };
-      // No ref at all — name + amount fallback
-      for (const s of sug) {
-        if (nameMatch(s.name, parsed.name) && Math.abs((s.amount || 0) - txn.amount) < 0.01)
-          return { s, conf: 'NAME_AMOUNT' };
-      }
-      return { s: null, conf: 'NO_MATCH' };
+    // Mobile check — no check number, show single suggestion for review
+    if (parsed.type === 'MOBILE_CHECK') {
+      if (sug.length === 0) return { s: null, conf: 'NOT_IN_JOBBER' };
+      if (sug.length === 1) return { s: sug[0], conf: 'SINGLE_REVIEW' };
+      return { s: sug[0], conf: 'MULTI_REVIEW' };
     }
 
-    if (parsed.type === 'COMPANY') {
+    // Zelle — exact: conf code = refNum AND sender name matches customer name
+    if (parsed.type === 'ZELLE') {
+      if (sug.length === 0) return { s: null, conf: 'NOT_IN_JOBBER' };
+      for (const s of sug) {
+        if (normRef(s.refNum) === normRef(parsed.ref) && nameMatch(s.name, parsed.name))
+          return { s, conf: 'EXACT' };
+      }
+      for (const s of sug) {
+        if (normRef(s.refNum) === normRef(parsed.ref))
+          return { s, conf: 'REF_ONLY' }; // ref matches but name off — flag it
+      }
+      return { s: null, conf: 'REF_MISSING' }; // conf code not in QB → TB Plumbing data issue
+    }
+
+    // Company ACH with a parseable payment ID — exact: ID = refNum AND name agrees
+    if (parsed.type === 'COMPANY_ACH' && parsed.ref) {
+      if (sug.length === 0) return { s: null, conf: 'NOT_IN_JOBBER' };
+      for (const s of sug) {
+        if (normRef(s.refNum) === normRef(parsed.ref) && nameMatch(s.name, parsed.name))
+          return { s, conf: 'EXACT' };
+      }
+      for (const s of sug) {
+        if (normRef(s.refNum) === normRef(parsed.ref))
+          return { s, conf: 'REF_ONLY' };
+      }
+      // ID not found in suggestions — fall back to name match
+      for (const s of sug) {
+        if (nameMatch(s.name, parsed.name))
+          return { s, conf: 'SINGLE_REVIEW' };
+      }
+      return { s: null, conf: 'REF_MISSING' };
+    }
+
+    // Company ACH without ref (1st American EFTPY mismatch, or Rely/OldRepublic wire)
+    // Trust QB's suggestion if it exists — it came from Jobber
+    if (parsed.type === 'COMPANY_ACH' || parsed.type === 'COMPANY') {
+      if (sug.length === 0) return { s: null, conf: 'NOT_IN_JOBBER' };
       for (const s of sug) {
         if (nameMatch(s.name, parsed.name) || nameMatch(parsed.name, s.name))
-          return { s, conf: 'COMPANY' };
+          return { s, conf: parsed.is1stAmerican ? 'FIRST_AMERICAN' : 'COMPANY_MATCH' };
       }
-      if (sug.length === 1) return { s: sug[0], conf: 'SINGLE' };
-      return { s: null, conf: 'NO_MATCH' };
+      if (sug.length === 1) return { s: sug[0], conf: 'SINGLE_REVIEW' };
+      return { s: sug[0], conf: 'MULTI_REVIEW' };
     }
 
     return { s: null, conf: 'NO_MATCH' };
   }
 
   const CONF = {
-    EXACT:       { label: 'Exact Match',   color: '#15803d', bg: '#dcfce7', auto: true  },
-    REF_ONLY:    { label: 'Name Mismatch', color: '#b45309', bg: '#fef3c7', auto: false },
-    NAME_AMOUNT: { label: 'Name + Amount', color: '#0369a1', bg: '#dbeafe', auto: false },
-    COMPANY:     { label: 'Company',       color: '#0369a1', bg: '#dbeafe', auto: false },
-    SINGLE:      { label: 'Only Option',   color: '#0369a1', bg: '#dbeafe', auto: false },
-    REF_MISSING: { label: 'Ref Not in QB', color: '#b91c1c', bg: '#fee2e2', auto: false },
-    NO_MATCH:    { label: 'No Match',      color: '#78716c', bg: '#f5f5f4', auto: false },
-    BATCH:       { label: 'ATM Batch',     color: '#78716c', bg: '#f5f5f4', auto: false },
+    EXACT:          { label: 'Exact Match',        color: '#15803d', bg: '#dcfce7', auto: true  },
+    COMPANY_MATCH:  { label: 'Jobber Match',        color: '#15803d', bg: '#dcfce7', auto: true  },
+    FIRST_AMERICAN: { label: '1st American ⚠',     color: '#b45309', bg: '#fef3c7', auto: false },
+    REF_ONLY:       { label: 'Name Mismatch',       color: '#b45309', bg: '#fef3c7', auto: false },
+    SINGLE_REVIEW:  { label: 'Review',              color: '#0369a1', bg: '#dbeafe', auto: false },
+    MULTI_REVIEW:   { label: 'Multiple Options',    color: '#7c3aed', bg: '#ede9fe', auto: false },
+    REF_MISSING:    { label: 'Wrong Ref in QB',     color: '#b91c1c', bg: '#fee2e2', auto: false },
+    NOT_IN_JOBBER:  { label: 'Not in Jobber',       color: '#b91c1c', bg: '#fee2e2', auto: false },
+    ATM_BATCH:      { label: 'ATM Batch',           color: '#78716c', bg: '#f5f5f4', auto: false },
+    NO_MATCH:       { label: 'No Match',            color: '#78716c', bg: '#f5f5f4', auto: false },
   };
 
   // ─── API ─────────────────────────────────────────────────────────────────────
@@ -100,7 +143,7 @@
       `${BASE}/getTransactions?accountId=${ACCOUNT_ID}&sort=txnDate&reviewState=PENDING&ignoreMatching=false&txnFilter=MONEY_IN`,
       { credentials: 'include' }
     );
-    if (!r.ok) throw new Error(`getTransactions ${r.status}`);
+    if (!r.ok) throw new Error(`getTransactions HTTP ${r.status}`);
     const d = await r.json();
     return d.items || [];
   }
@@ -113,14 +156,14 @@
       qboAccountId: txn.qboAccountId,
       selectedMatches: {
         matchedTxns: [{
-          qboTxnId: s.qboTxnId,
-          txnTypeId: s.txnTypeId,
-          qboTxnSeqId: s.qboTxnSeqId || '0',
-          txnSyncToken: s.txnSyncToken || '0',
+          qboTxnId:      s.qboTxnId,
+          txnTypeId:     s.txnTypeId,
+          qboTxnSeqId:   s.qboTxnSeqId  || '0',
+          txnSyncToken:  s.txnSyncToken || '0',
           paymentAmount: Number(s.amount || txn.amount).toFixed(2),
         }],
         addAdjQboTxn: null,
-        addAsQboTxn: null,
+        addAsQboTxn:  null,
       },
     };
     const r = await fetch(`${BASE}/acceptTransactions`, {
@@ -128,43 +171,46 @@
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    return { ok: r.ok, status: r.status, body: r.ok ? null : await r.text() };
+    return { ok: r.ok, status: r.status, text: r.ok ? null : await r.text() };
   }
 
   // ─── UI ──────────────────────────────────────────────────────────────────────
 
-  const $ = id => document.getElementById(id);
-  const fmt = n => '$' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const $   = id => document.getElementById(id);
+  const esc = s  => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const fmt = n  => '$' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   const CSS = `
     #qbmt-panel *{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
-    #qbmt-panel{position:fixed;top:20px;right:20px;width:860px;max-width:calc(100vw - 40px);max-height:90vh;
-      background:#fff;border:1px solid #d1d5db;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.2);
-      z-index:99999;display:flex;flex-direction:column;overflow:hidden}
-    #qbmt-head{background:#1c1917;color:#fff;padding:14px 18px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
-    #qbmt-head h2{font-size:15px;font-weight:600;letter-spacing:.01em}
+    #qbmt-panel{position:fixed;top:20px;right:20px;width:900px;max-width:calc(100vw - 40px);
+      max-height:90vh;background:#fff;border:1px solid #d1d5db;border-radius:12px;
+      box-shadow:0 20px 60px rgba(0,0,0,.22);z-index:99999;display:flex;flex-direction:column;overflow:hidden}
+    #qbmt-head{background:#1c1917;color:#fff;padding:14px 18px;display:flex;align-items:center;
+      justify-content:space-between;flex-shrink:0}
+    #qbmt-head h2{font-size:15px;font-weight:600}
     #qbmt-head button{background:rgba(255,255,255,.15);border:none;color:#fff;width:28px;height:28px;
       border-radius:6px;cursor:pointer;font-size:16px;line-height:1}
-    #qbmt-stats{padding:12px 18px;background:#f9fafb;border-bottom:1px solid #e5e7eb;flex-shrink:0;
-      display:flex;gap:10px;flex-wrap:wrap}
-    .qbmt-chip{font-size:11px;padding:4px 10px;border-radius:20px;font-weight:500;white-space:nowrap}
+    #qbmt-stats{padding:10px 18px;background:#f9fafb;border-bottom:1px solid #e5e7eb;
+      flex-shrink:0;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+    .qbmt-chip{font-size:11px;padding:3px 10px;border-radius:20px;font-weight:500;white-space:nowrap}
     #qbmt-body{overflow-y:auto;flex:1}
     #qbmt-table{width:100%;border-collapse:collapse;font-size:12px}
     #qbmt-table th{background:#f3f4f6;font-size:10px;font-weight:600;text-transform:uppercase;
-      letter-spacing:.06em;color:#6b7280;padding:8px 10px;text-align:left;border-bottom:1px solid #e5e7eb;
-      position:sticky;top:0}
+      letter-spacing:.06em;color:#6b7280;padding:8px 10px;text-align:left;
+      border-bottom:1px solid #e5e7eb;position:sticky;top:0;z-index:1}
     #qbmt-table td{padding:8px 10px;border-bottom:1px solid #f3f4f6;vertical-align:top}
     #qbmt-table tr:hover td{background:#fafafa}
     #qbmt-table tr.qbmt-exact td{background:#f0fdf4}
-    #qbmt-table tr.qbmt-flag td{background:#fff7ed}
-    #qbmt-table tr.qbmt-error td{background:#fef2f2}
-    #qbmt-table tr.qbmt-dim td{opacity:.45}
-    .qbmt-badge{display:inline-block;font-size:9px;font-weight:600;padding:2px 7px;border-radius:10px;
-      text-transform:uppercase;letter-spacing:.04em;white-space:nowrap}
-    .qbmt-ref{font-family:monospace;font-size:10px;color:#9ca3af;margin-top:2px}
-    .qbmt-name{font-weight:500;font-size:12px}
-    #qbmt-foot{padding:12px 18px;border-top:1px solid #e5e7eb;display:flex;align-items:center;
-      gap:10px;flex-shrink:0;background:#fff}
+    #qbmt-table tr.qbmt-warn td{background:#fffbeb}
+    #qbmt-table tr.qbmt-err td{background:#fef2f2}
+    #qbmt-table tr.qbmt-dim td{opacity:.4}
+    .qbmt-badge{display:inline-block;font-size:9px;font-weight:600;padding:2px 7px;
+      border-radius:10px;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap}
+    .qbmt-main{font-weight:500;font-size:12px}
+    .qbmt-sub{font-size:10px;color:#9ca3af;margin-top:2px;font-family:monospace}
+    .qbmt-note{font-size:11px;margin-top:3px}
+    #qbmt-foot{padding:12px 18px;border-top:1px solid #e5e7eb;display:flex;
+      align-items:center;gap:10px;flex-shrink:0;background:#fff}
     .qbmt-btn{padding:8px 16px;border-radius:7px;font-size:12px;font-weight:500;cursor:pointer;border:none}
     .qbmt-btn-primary{background:#007a63;color:#fff}
     .qbmt-btn-primary:hover{background:#006652}
@@ -172,26 +218,26 @@
     .qbmt-btn-ghost{background:none;border:1px solid #d1d5db;color:#374151}
     .qbmt-btn-ghost:hover{border-color:#9ca3af}
     #qbmt-log{font-family:monospace;font-size:10px;color:#6b7280;padding:8px 18px;
-      background:#f9fafb;border-top:1px solid #e5e7eb;max-height:80px;overflow-y:auto;display:none;flex-shrink:0}
+      background:#f9fafb;border-top:1px solid #e5e7eb;max-height:80px;overflow-y:auto;
+      display:none;flex-shrink:0}
   `;
 
   function buildPanel() {
     const style = document.createElement('style');
     style.textContent = CSS;
     document.head.appendChild(style);
-
     const panel = document.createElement('div');
     panel.id = 'qbmt-panel';
     panel.innerHTML = `
       <div id="qbmt-head">
-        <h2>QB Match Tool <span id="qbmt-title-count" style="font-weight:400;opacity:.7;font-size:13px"></span></h2>
+        <h2>QB Match Tool &nbsp;<span id="qbmt-count" style="font-weight:400;opacity:.6;font-size:13px"></span></h2>
         <button onclick="document.getElementById('qbmt-panel').remove()" title="Close">✕</button>
       </div>
       <div id="qbmt-stats"><span style="font-size:12px;color:#6b7280">Loading transactions…</span></div>
       <div id="qbmt-body">
         <table id="qbmt-table">
           <thead><tr>
-            <th style="width:32px"><input type="checkbox" id="qbmt-sel-all" onchange="qbmtToggleAll(this)"></th>
+            <th style="width:32px"><input type="checkbox" id="qbmt-all" onchange="qbmtToggleAll(this)"></th>
             <th>Date</th>
             <th>Bank Description</th>
             <th>Amount</th>
@@ -202,9 +248,9 @@
         </table>
       </div>
       <div id="qbmt-foot">
-        <button class="qbmt-btn qbmt-btn-primary" id="qbmt-confirm-btn" onclick="qbmtConfirm()" disabled>Confirm Selected</button>
-        <button class="qbmt-btn qbmt-btn-ghost" onclick="qbmtSelectExact()">Select All Exact</button>
-        <span id="qbmt-sel-label" style="font-size:11px;color:#6b7280;margin-left:auto"></span>
+        <button class="qbmt-btn qbmt-btn-primary" id="qbmt-confirm" onclick="qbmtConfirm()" disabled>Confirm Selected</button>
+        <button class="qbmt-btn qbmt-btn-ghost" onclick="qbmtSelectAuto()">Select Auto-Matches</button>
+        <span id="qbmt-sel-lbl" style="font-size:11px;color:#6b7280;margin-left:auto"></span>
       </div>
       <div id="qbmt-log"></div>
     `;
@@ -214,19 +260,17 @@
   let rows = [];
 
   function renderRows() {
-    const exact    = rows.filter(r => r.conf === 'EXACT').length;
-    const review   = rows.filter(r => ['REF_ONLY','NAME_AMOUNT','COMPANY','SINGLE'].includes(r.conf)).length;
-    const flagged  = rows.filter(r => r.conf === 'REF_MISSING').length;
-    const batch    = rows.filter(r => r.conf === 'BATCH').length;
-    const noMatch  = rows.filter(r => r.conf === 'NO_MATCH').length;
+    const auto    = rows.filter(r => CONF[r.conf]?.auto).length;
+    const review  = rows.filter(r => ['SINGLE_REVIEW','MULTI_REVIEW','REF_ONLY','FIRST_AMERICAN'].includes(r.conf)).length;
+    const flagged = rows.filter(r => ['REF_MISSING','NOT_IN_JOBBER'].includes(r.conf)).length;
+    const manual  = rows.filter(r => r.conf === 'ATM_BATCH').length;
 
-    $('qbmt-title-count').textContent = `— ${rows.length} transactions`;
+    $('qbmt-count').textContent = `— ${rows.length} pending`;
     $('qbmt-stats').innerHTML = [
-      `<span class="qbmt-chip" style="background:#dcfce7;color:#15803d">✅ ${exact} Exact</span>`,
-      `<span class="qbmt-chip" style="background:#dbeafe;color:#0369a1">👁 ${review} Review</span>`,
-      flagged  ? `<span class="qbmt-chip" style="background:#fee2e2;color:#b91c1c">⚠️ ${flagged} Ref Missing in QB</span>` : '',
-      batch    ? `<span class="qbmt-chip" style="background:#f3f4f6;color:#6b7280">⊘ ${batch} ATM Batch</span>` : '',
-      noMatch  ? `<span class="qbmt-chip" style="background:#f3f4f6;color:#6b7280">— ${noMatch} No Match</span>` : '',
+      `<span class="qbmt-chip" style="background:#dcfce7;color:#15803d">✅ ${auto} Auto-match</span>`,
+      review  ? `<span class="qbmt-chip" style="background:#dbeafe;color:#0369a1">👁 ${review} Review</span>` : '',
+      flagged ? `<span class="qbmt-chip" style="background:#fee2e2;color:#b91c1c">⚠️ ${flagged} Flagged</span>` : '',
+      manual  ? `<span class="qbmt-chip" style="background:#f3f4f6;color:#6b7280">⊘ ${manual} ATM Batch</span>` : '',
     ].join('');
 
     const tbody = $('qbmt-tbody');
@@ -234,47 +278,66 @@
 
     rows.forEach((row, i) => {
       const cfg = CONF[row.conf] || CONF.NO_MATCH;
-      const canSelect = row.s != null;
-      const rowClass = row.conf === 'EXACT' ? 'qbmt-exact'
-        : row.conf === 'REF_MISSING' ? 'qbmt-error'
-        : ['REF_ONLY'].includes(row.conf) ? 'qbmt-flag'
-        : ['BATCH','NO_MATCH'].includes(row.conf) ? 'qbmt-dim' : '';
+      const rowCls =
+        cfg.auto                                             ? 'qbmt-exact' :
+        ['REF_MISSING','NOT_IN_JOBBER'].includes(row.conf)  ? 'qbmt-err'   :
+        ['REF_ONLY','MULTI_REVIEW','FIRST_AMERICAN'].includes(row.conf) ? 'qbmt-warn' :
+        ['ATM_BATCH','NO_MATCH'].includes(row.conf)         ? 'qbmt-dim'   : '';
 
       const date = (row.txn.olbTxnDate || '').substring(0, 10);
 
-      const bankDesc = `
-        <div class="qbmt-name">${esc(row.txn.description || '')}</div>
-        <div class="qbmt-ref">${esc((row.txn.origDescription || '').substring(0, 70))}</div>
-        ${row.parsed.ref ? `<div class="qbmt-ref" style="color:#007a63">Parsed ref: ${esc(row.parsed.ref)} · ${esc(row.parsed.name || '')}</div>` : ''}
-      `;
+      // Bank description cell
+      let bankHtml = `<div class="qbmt-main">${esc(row.txn.description || row.txn.origDescription || '')}</div>`;
+      if (row.parsed.type === 'ZELLE' && row.parsed.ref) {
+        bankHtml += `<div class="qbmt-sub">Conf# ${esc(row.parsed.ref)} · from ${esc(row.parsed.name)}</div>`;
+      } else if (row.parsed.type === 'COMPANY_ACH' && row.parsed.ref) {
+        bankHtml += `<div class="qbmt-sub">Bank ID: ${esc(row.parsed.ref)}</div>`;
+      } else if (row.parsed.type === 'ATM_BATCH') {
+        bankHtml += `<div class="qbmt-note" style="color:#b45309">Multiple checks — match manually in QB</div>`;
+      } else if (row.parsed.type === 'MOBILE_CHECK') {
+        bankHtml += `<div class="qbmt-sub" style="color:#9ca3af">Mobile deposit — no check # available</div>`;
+      }
 
-      const matchInfo = row.s ? `
-        <div class="qbmt-name">${esc(row.s.name || '—')}</div>
-        <div class="qbmt-ref">Ref: ${esc(row.s.refNum || '—')} · ${fmt(row.s.amount)}</div>
-      ` : row.conf === 'REF_MISSING' ? `
-        <div style="font-size:11px;color:#b91c1c">Ref <b>${esc(row.parsed.ref)}</b> not found in QB suggestions<br>TB Plumbing needs to fix the payment reference</div>
-      ` : `<span style="color:#9ca3af;font-size:11px">—</span>`;
+      // Matched payment cell
+      let matchHtml = '';
+      if (row.s) {
+        matchHtml = `
+          <div class="qbmt-main">${esc(row.s.name || '—')}</div>
+          <div class="qbmt-sub">Ref: ${esc(row.s.refNum || '—')} &nbsp;·&nbsp; ${fmt(row.s.amount)}</div>
+        `;
+        if (row.conf === 'FIRST_AMERICAN') {
+          matchHtml += `<div class="qbmt-note" style="color:#b45309">1st American EFTPY mismatch — verify manually</div>`;
+        } else if (row.conf === 'MULTI_REVIEW') {
+          const n = row.txn.suggestedMatches?.matchedTxns?.length || 0;
+          matchHtml += `<div class="qbmt-note" style="color:#7c3aed">${n} options — showing best guess, verify before confirming</div>`;
+        }
+      } else if (row.conf === 'REF_MISSING') {
+        const label = row.parsed.type === 'ZELLE' ? `Conf# ${esc(row.parsed.ref)}` : `ID ${esc(row.parsed.ref)}`;
+        matchHtml = `<div class="qbmt-note" style="color:#b91c1c">${label} not found in QB suggestions<br>TB Plumbing needs to correct the payment reference in Jobber</div>`;
+      } else if (row.conf === 'NOT_IN_JOBBER') {
+        matchHtml = `<div class="qbmt-note" style="color:#b91c1c">No payment found — not yet recorded in Jobber</div>`;
+      } else {
+        matchHtml = `<span style="color:#9ca3af;font-size:11px">—</span>`;
+      }
 
+      const canSelect = row.s != null;
       const tr = document.createElement('tr');
-      tr.className = rowClass;
+      tr.className = rowCls;
       tr.dataset.index = i;
       tr.innerHTML = `
-        <td><input type="checkbox" class="qbmt-row-cb" data-i="${i}" ${canSelect ? '' : 'disabled'}
-          ${cfg.auto ? 'checked' : ''} onchange="qbmtUpdateBtn()"></td>
+        <td><input type="checkbox" class="qbmt-cb" data-i="${i}"
+          ${canSelect ? '' : 'disabled'} ${cfg.auto ? 'checked' : ''}
+          onchange="qbmtUpdateBtn()"></td>
         <td style="white-space:nowrap;font-family:monospace;font-size:11px;color:#6b7280">${date}</td>
-        <td>${bankDesc}</td>
+        <td>${bankHtml}</td>
         <td style="font-family:monospace;font-weight:600;white-space:nowrap">${fmt(row.txn.amount)}</td>
-        <td>${matchInfo}</td>
+        <td>${matchHtml}</td>
         <td><span class="qbmt-badge" style="background:${cfg.bg};color:${cfg.color}">${cfg.label}</span></td>
       `;
       tbody.appendChild(tr);
     });
 
     qbmtUpdateBtn();
-  }
-
-  function esc(s) {
-    return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   }
 
   function qbmtLog(msg) {
@@ -284,51 +347,49 @@
     el.scrollTop = el.scrollHeight;
   }
 
-  window.qbmtToggleAll = function(cb) {
-    document.querySelectorAll('.qbmt-row-cb:not(:disabled)').forEach(c => c.checked = cb.checked);
+  window.qbmtToggleAll = cb => {
+    document.querySelectorAll('.qbmt-cb:not(:disabled)').forEach(c => c.checked = cb.checked);
     qbmtUpdateBtn();
   };
 
-  window.qbmtSelectExact = function() {
-    document.querySelectorAll('.qbmt-row-cb').forEach(c => {
-      c.checked = !c.disabled && rows[+c.dataset.i]?.conf === 'EXACT';
+  window.qbmtSelectAuto = () => {
+    document.querySelectorAll('.qbmt-cb').forEach(c => {
+      c.checked = !c.disabled && !!CONF[rows[+c.dataset.i]?.conf]?.auto;
     });
     qbmtUpdateBtn();
   };
 
-  window.qbmtUpdateBtn = function() {
-    const n = document.querySelectorAll('.qbmt-row-cb:checked').length;
-    const btn = $('qbmt-confirm-btn');
-    btn.disabled = n === 0;
-    btn.textContent = n > 0 ? `Confirm ${n} Selected` : 'Confirm Selected';
-    $('qbmt-sel-label').textContent = n > 0 ? `${n} selected` : '';
+  window.qbmtUpdateBtn = () => {
+    const n = document.querySelectorAll('.qbmt-cb:checked').length;
+    $('qbmt-confirm').disabled = n === 0;
+    $('qbmt-confirm').textContent = n > 0 ? `Confirm ${n} Selected` : 'Confirm Selected';
+    $('qbmt-sel-lbl').textContent = n > 0 ? `${n} selected` : '';
   };
 
-  window.qbmtConfirm = async function() {
-    const checked = [...document.querySelectorAll('.qbmt-row-cb:checked')].map(c => +c.dataset.i);
-    if (!checked.length) return;
-
-    $('qbmt-confirm-btn').disabled = true;
-    $('qbmt-confirm-btn').textContent = 'Confirming…';
+  window.qbmtConfirm = async () => {
+    const idxs = [...document.querySelectorAll('.qbmt-cb:checked')].map(c => +c.dataset.i);
+    if (!idxs.length) return;
+    $('qbmt-confirm').disabled = true;
+    $('qbmt-confirm').textContent = 'Confirming…';
 
     let ok = 0, fail = 0;
-    for (const i of checked) {
+    for (const i of idxs) {
       const { txn, s } = rows[i];
       if (!s) { fail++; continue; }
-      const result = await acceptTxn(txn, s);
-      if (result.ok) {
+      const res = await acceptTxn(txn, s);
+      if (res.ok) {
         ok++;
-        qbmtLog(`✅ ${txn.description} ${fmt(txn.amount)}`);
+        qbmtLog(`✅ ${txn.description || txn.id} ${fmt(txn.amount)}`);
         const tr = document.querySelector(`tr[data-index="${i}"]`);
-        if (tr) { tr.style.opacity = '.3'; tr.querySelector('.qbmt-row-cb').disabled = true; }
+        if (tr) { tr.style.opacity = '.3'; tr.querySelector('.qbmt-cb').disabled = true; }
       } else {
         fail++;
-        qbmtLog(`❌ ${txn.description} — HTTP ${result.status}: ${result.body}`);
+        qbmtLog(`❌ ${txn.description || txn.id} — HTTP ${res.status}: ${res.text}`);
       }
       await new Promise(r => setTimeout(r, 350));
     }
 
-    $('qbmt-confirm-btn').textContent = `Done — ${ok} confirmed${fail ? `, ${fail} failed` : ''}`;
+    $('qbmt-confirm').textContent = `Done — ${ok} confirmed${fail ? `, ${fail} failed` : ''}`;
     qbmtLog(`Finished: ${ok} confirmed, ${fail} failed.`);
   };
 
@@ -344,7 +405,7 @@
     });
     renderRows();
   }).catch(err => {
-    $('qbmt-stats').innerHTML = `<span style="color:#b91c1c">Error: ${esc(err.message)}</span>`;
+    $('qbmt-stats').innerHTML = `<span style="color:#b91c1c;font-size:13px">Error: ${esc(err.message)}</span>`;
   });
 
 })();
