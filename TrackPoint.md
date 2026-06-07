@@ -1,6 +1,6 @@
 # TrackPoint OS — Complete Settings & Context
 
-*Compiled 2026-05-22*
+*Compiled 2026-05-22 · Updated 2026-06-07 (commits 102a399 → 881b26d)*
 
 ---
 
@@ -294,25 +294,82 @@ else if (/\bEFTPY\d+\b/i.test(fullText) || /\bFALCON\b/i.test(fullText)) co = 'F
 - **Multiple WCNs on one line = one invoice at full amount** — fixed 2026-05-21 (commit 4449e99). First WCN is the match key; remaining WCNs stored in `secondary_ref`.
 - **Auto-detection (PDF):** regex `\b260\d{7,8}\b` also identifies Rheem in PDF text
 
-### Jobber Subject Format (corrected 2026-05-22)
+### Jobber Subject Format (corrected 2026-06-07)
 ```
-CAS-XXXXXXX-XXXXXX - WCN 2603250343, 2603300112, 2604010137
+CAS-2166291-H6B8W7 -WCN - 2603120079 / 2603040048
 ```
-WCNs are comma-separated after "WCN " (no dash before WCNs). `lookupJobber` uses a partial/contains match — tries each WCN from the remittance line (primary + all secondary) as a substring against Jobber Subject keys.
+WCNs appear after `-WCN -` separated by ` / `. `lookupJobber` splits any comma-joined ref from the collector using `/\b260\d{7,8}\b/g`, then tries each WCN individually as an exact key, then falls back to partial/contains match against all Jobber Subject keys.
 
 ---
 
-## Open Issues (as of 2026-05-22)
+## Changes Since 2026-05-22 (commits 102a399 → 881b26d)
 
-1. **April 14 check (ref 2701021, client 108338080 TB Plumbing):** ~37 invoices still outstanding. New scroll code (position-based + nav retry) needs confirmation it scrolls through full list.
+### Rebrand — IntrepiPay → TrackPoint (102a399)
+- App name, UI labels, Render service name, file paths, and this doc all updated to TrackPoint
+- Production URL unchanged: https://intrepipay.com
+- Render service renamed from `intrepipay` to `trackpoint`; `COLLECTOR_URL` env var added
 
-2. **May 5 Rely check (ref 2707226, client 108338080):** ~50 middle invoices that didn't save from 2026-05-19 still need to be applied.
+### Lula Added (eb42fb9)
+- Lula Home Services added as a supported company in the modal dropdown and parser
+- `lookupJobber` handles Lula job IDs; "no invoice" notice shown when 0 claims match
 
-3. **Recouped Funds / deduction:** Verify the exact amount for the 2-10 deduction.
+### Parsing Fixes (2ef8872)
+- **2-10 Home Buyers Warranty:** fixed Excel column detection
+- **ORHP (Old Republic):** fixed key/value header extraction for Check Number + Check Date
+- **Lula:** 3 different export formats now handled (standard, jobs-detail, compact payout)
+- **Cinch PDF:** improved SCC# extraction from remittance PDFs
 
-4. **Duplicate payment risk:** Verify in Jobber whether check #2705192 was applied once or twice (bad run may have checked ~40 invoices totaling $9,215).
+### AI Extraction Fallback (96b3014)
+- When `_parseExcelSheet` returns null for an unrecognized format, `aiExtractRemittance` is called
+- Sends raw sheet text to Claude API using the user's stored API key
+- Returns structured `{co, ref, amt, date, remit}` — same shape as the manual parsers
+- Requires `window._apiKey` to be set (via the 🔑 API Key button)
 
-5. **Shortpay amount verification:** Next Rheem payment with shortpay — confirm Jobber records the remittance amount (not the invoice total) after applying via the GraphQL API path.
+### Remittance Collector (7025771 → 8e05115)
+- **Sources:** Rely, Lula, ORHP, 2-10, Rheem, First American, Lessen
+- Each source uses Playwright to log into the company portal and scrape pending remittances
+- Originally a separate process (`collector/index.js` on port 3001); **merged inline into `server.js`** (8e05115) using a try/catch IIFE
+- On Render (where Playwright can't run), `collectorSources` is null → `/api/collect` returns 503 gracefully
+- **Not deployed to Render** — runs locally only (would require a separate $25/mo Render instance for Playwright)
+- `start.ps1` launches: Chrome (CDP port 9222) + `node server.js` + `node scripts/local-worker.js`
+- Collect button status visibility fixed (CSS `display:none` was never overridden; now explicitly set via JS)
+
+### Jobber Payment API Removed (30f4143 → 28e6377)
+- Jobber removed `invoicePaymentCreate` mutation from newer API versions (~2026-05-22)
+- TrackPoint probed multiple API versions to find this; ultimately removed GraphQL payment path entirely
+- **All payments now route through Playwright** (local worker via SSE)
+- Shortpay path: passes explicit `amount` param to Playwright; Playwright overrides the Jobber-computed balance
+- Non-shortpay path: Playwright applies whatever Jobber computes (full balance)
+
+### Local Worker / SSE Architecture (3da9d78)
+- `scripts/local-worker.js` polls `GET /api/jobs/next` (authenticated by `WORKER_SECRET`)
+- Server enqueues Playwright jobs; worker picks them up, runs them, streams log lines back via `POST /api/jobs/:id/log`
+- Browser receives SSE stream from `GET /api/playwright-payment?...`
+- Allows TrackPoint server to run on Render while Playwright automation runs on the local machine
+
+### Invoice Matching — Wrong-Client Fix (e516238 → 881b26d)
+- **Problem:** Invoices under the wrong Jobber client (e.g., a 2-10 invoice filed under a homeowner) were being matched and applied, causing incorrect payments
+- **Fix — `coHasOwnClient` flag:** before filtering by client name, `lookupJobber` checks whether any Jobber invoice exists with that company as the client
+  - If yes (e.g., "2-10", "Rely") → enforces client name filter; wrong-client rows return null → status = `missing`
+  - If no (e.g., "Rheem" — invoices are always under homeowners) → skips filter entirely
+- Prevents the Apply All button from appearing when an invoice is under the wrong client
+
+### Rheem WCN Multi-Match Fix (881b26d)
+- **Problem:** Collector stored multiple WCNs as `"2603110023,2603130027,2603240379"` (comma-joined); `lookupJobber` tried to look up the entire string as one key — not found
+- **Fix:** `lookupJobber` splits the ref using `/\b260\d{7,8}\b/g` regex before lookup; tries each WCN individually, then falls back to partial key match (`k.includes(wcn)`)
+- Jobber subject format (corrected): `CAS-2166291-H6B8W7 -WCN - 2603120079 / 2603040048` — WCNs after `-WCN -` separated by ` / `
+
+### `start.ps1` Desktop Shortcut Updates
+- Added `Start-Process "http://localhost:3000"` — opens TrackPoint automatically
+- Opens Jobber + TrackPoint in Chrome, then starts server + worker in separate PowerShell windows
+
+---
+
+## Open Issues (as of 2026-06-07)
+
+1. **Shortpay amount verification:** Next Rheem shortpay — confirm Jobber records the remittance amount (not invoice total) after Playwright applies it with the explicit `amount` override.
+
+2. **Collector not on Render:** Playwright-based collection only works locally. Dedicated Render instance ($25/mo) needed if other clients ever use TrackPoint.
 
 ---
 
