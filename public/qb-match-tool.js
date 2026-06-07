@@ -138,18 +138,32 @@
 
   // ─── API ─────────────────────────────────────────────────────────────────────
 
-  function qbHeaders() {
-    const csrf = (document.cookie.match(/qbo\.csrftoken=([^;]+)/) || [])[1] || '';
-    return {
-      'intuit-csrf-token': csrf,
-      'X-CSRF-Token':      csrf,
+  const QB_API_KEY = 'prdakyresxaDrhFXaSARXaUdj1S8M7h6YK7YGekc';
+
+  function qbHeaders(range) {
+    const csrf  = (document.cookie.match(/qbo\.csrftoken=([^;]+)/)          || [])[1] || '';
+    const xcsrf = (document.cookie.match(/qbo\.xcsrfderivationkey=([^;]+)/) || [])[1] || '';
+    const uid   = (document.cookie.match(/userIdentifier=([^;]+)/)           || [])[1] || '';
+    const tid   = typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : Math.random().toString(36).slice(2);
+    const h = {
+      'apikey':            QB_API_KEY,
+      'authorization':     `Intuit_APIKey intuit_apikey=${QB_API_KEY}, intuit_apikey_version=1.0`,
+      'authtype':          'browser_auth',
+      'csrftoken':         csrf,
+      'intuit-company-id': COMPANY_ID,
+      'intuit-plugin-id':  'integrations-datain-ui',
+      'intuit-user-id':    uid,
+      'intuit_tid':        tid,
+      'x-csrf-token':      xcsrf,
     };
+    if (range) h['x-range'] = range;
+    return h;
   }
 
   async function fetchPending() {
     const r = await fetch(
       `${BASE}/getTransactions?sort=-txnDate&reviewState=PENDING&ignoreMatching=false&accountId=${ACCOUNT_ID}`,
-      { credentials: 'include', headers: qbHeaders() }
+      { credentials: 'include', headers: qbHeaders('items=0-499') }
     );
     if (!r.ok) throw new Error(`getTransactions HTTP ${r.status}`);
     const d = await r.json();
