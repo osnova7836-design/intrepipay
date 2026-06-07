@@ -290,27 +290,31 @@ app.get('/api/qb/payments', async (req, res) => {
 app.get('/api/qb/bank-transactions', async (req, res) => {
   try {
     const { token, realmId } = await getValidQbToken();
-    const query = `SELECT * FROM BankTransaction WHERE TxnStatus = 'PENDING' MAXRESULTS 200`;
-    const url = `${QB_API_BASE}/v3/company/${realmId}/query?query=${encodeURIComponent(query)}&minorversion=65`;
+    // BankTransaction is not a queryable entity — use the dedicated REST endpoint
+    const url = `${QB_API_BASE}/v3/company/${realmId}/banktransactions?minorversion=65`;
     const resp = await fetch(url, { headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' } });
     const data = await resp.json();
     if (!resp.ok) return res.status(resp.status).json({ error: data });
-    const transactions = (data.QueryResponse?.BankTransaction || []).map(t => ({
-      id: t.Id,
-      txnDate: t.TxnDate,
-      amount: t.Amount,
-      description: t.Description || '',
-      entityRef: t.EntityRef?.name || '',
-      accountName: t.BankAccountRef?.name || '',
-      suggestedMatches: (t.SuggestedMatchList || []).map(m => ({
-        txnType: m.TxnType,
-        txnId: m.Txn?.Id || '',
-        entityName: m.Txn?.EntityRef?.name || '',
-        txnDate: m.Txn?.TxnDate || '',
-        amount: m.Txn?.Amount || 0,
-      })),
-    }));
-    res.json({ transactions });
+    // Return raw so we can inspect the actual QB response shape on first call
+    const rawList = data.BankTransactions || data.BankTransaction || data.QueryResponse?.BankTransaction || [];
+    const transactions = rawList
+      .filter(t => !t.TxnStatus || t.TxnStatus === 'PENDING')
+      .map(t => ({
+        id: t.Id,
+        txnDate: t.TxnDate,
+        amount: t.Amount,
+        description: t.Description || '',
+        entityRef: t.EntityRef?.name || '',
+        accountName: t.BankAccountRef?.name || '',
+        suggestedMatches: (t.SuggestedMatchList || []).map(m => ({
+          txnType: m.TxnType,
+          txnId: m.Txn?.Id || '',
+          entityName: m.Txn?.EntityRef?.name || '',
+          txnDate: m.Txn?.TxnDate || '',
+          amount: m.Txn?.Amount || 0,
+        })),
+      }));
+    res.json({ transactions, _raw: data });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
