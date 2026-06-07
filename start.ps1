@@ -13,9 +13,10 @@ if ($existing) {
 Write-Host "Launching Chrome on debug port 9222..."
 Start-Process $chromePath -ArgumentList "--remote-debugging-port=9222", "--user-data-dir=$profileDir"
 
-Write-Host "Opening Jobber in Chrome..."
+Write-Host "Opening Jobber and TrackPoint in Chrome..."
 Start-Sleep -Seconds 2
 Start-Process "https://secure.getjobber.com"
+Start-Process "http://localhost:3000"
 
 # Start server and worker in separate windows
 Write-Host "Starting server and worker..."

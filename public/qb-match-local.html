@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QB Bank Match — Local</title>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#f5f3ef;--surface:#fff;--teal:#007a63;--teal-light:#00a688;--teal-bg:#e6f4f1;--green:#15803d;--green-bg:#dcfce7;--amber:#b45309;--amber-bg:#fef3c7;--red:#b91c1c;--red-bg:#fee2e2;--text:#1c1917;--text-dim:#57534e;--text-muted:#a8a29e;--border:#e2ddd8}
+body{background:var(--bg);color:var(--text);font-family:'IBM Plex Sans',sans-serif;font-size:14px;min-height:100vh}
+.header{background:#1c1917;padding:1.25rem 2rem;display:flex;align-items:center;justify-content:space-between}
+.logo{font-family:'Playfair Display',serif;font-size:20px;font-weight:700;color:#fff}
+.logo span{color:#00c9a7}
+.logo-sub{font-family:'IBM Plex Mono',monospace;font-size:10px;color:rgba(255,255,255,0.4);letter-spacing:.08em;text-transform:uppercase;margin-left:8px}
+.container{max-width:1100px;margin:0 auto;padding:2rem}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:1.5rem;margin-bottom:1.5rem}
+.card-title{font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--text-dim);margin-bottom:1rem}
+.upload-zone{border:1.5px dashed var(--border);border-radius:8px;padding:1.5rem;text-align:center;cursor:pointer;position:relative;background:#faf9f7}
+.upload-zone:hover{border-color:var(--teal);background:var(--teal-bg)}
+.upload-zone input{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%}
+.upload-zone.done{border-color:var(--teal);border-style:solid;background:var(--teal-bg)}
+.btn{padding:10px 20px;border-radius:8px;font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:.06em;cursor:pointer;border:none;font-weight:500}
+.btn-primary{background:var(--teal);color:#fff}
+.btn-primary:hover{background:var(--teal-light)}
+.btn-primary:disabled{opacity:.4;cursor:not-allowed}
+.btn-outline{background:none;border:1px solid var(--border);color:var(--text-dim)}
+.btn-outline:hover{border-color:var(--teal);color:var(--teal)}
+.summary{display:flex;gap:1rem;margin-bottom:1.5rem;flex-wrap:wrap}
+.summary-chip{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:.625rem 1rem;font-family:'IBM Plex Mono',monospace;font-size:12px}
+.summary-chip b{font-size:18px;display:block;margin-bottom:2px}
+.summary-chip.green{border-color:#86efac;background:var(--green-bg)}
+.summary-chip.green b{color:var(--green)}
+.summary-chip.amber{border-color:#fcd34d;background:var(--amber-bg)}
+.summary-chip.amber b{color:var(--amber)}
+.summary-chip.muted b{color:var(--text-muted)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{font-family:'IBM Plex Mono',monospace;font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);padding:.5rem .75rem;text-align:left;border-bottom:1px solid var(--border);white-space:nowrap}
+td{padding:.625rem .75rem;border-bottom:1px solid var(--border);vertical-align:top}
+tr:last-child td{border-bottom:none}
+tr.ready{background:#f0fdf4}
+tr.skip{opacity:.5}
+.tag{display:inline-block;font-family:'IBM Plex Mono',monospace;font-size:9px;padding:2px 6px;border-radius:4px;letter-spacing:.04em;text-transform:uppercase;font-weight:500}
+.tag-green{background:var(--green-bg);color:var(--green)}
+.tag-amber{background:var(--amber-bg);color:var(--amber)}
+.tag-red{background:var(--red-bg);color:var(--red)}
+.tag-muted{background:#f0ede8;color:var(--text-muted)}
+.name{font-weight:500}
+.ref{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--text-muted)}
+.actions{display:flex;gap:.75rem;align-items:center;flex-wrap:wrap;margin-top:1rem}
+#log{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--text-dim);margin-top:1rem;line-height:1.8;max-height:200px;overflow-y:auto;background:#f5f3ef;border-radius:6px;padding:.75rem;display:none}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div style="display:flex;align-items:center">
+    <div class="logo">Track<span>Point</span></div>
+    <div class="logo-sub">QB Batch Match · Local Only</div>
+  </div>
+  <a href="/" style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:rgba(255,255,255,0.5);text-decoration:none">← Back</a>
+</div>
+
+<div class="container">
+
+  <div class="card">
+    <div class="card-title">Step 1 — Upload Checks &amp; Zelle spreadsheet</div>
+    <div class="upload-zone" id="upload-zone">
+      <input type="file" accept=".xlsx,.xls" onchange="loadExcel(this)">
+      <div style="font-size:24px;margin-bottom:.5rem">📊</div>
+      <div style="font-weight:500" id="upload-label">Drop "Checks and Zelle.xlsx"</div>
+      <div style="font-size:11px;color:var(--text-muted);font-family:'IBM Plex Mono',monospace;margin-top:4px">Check # · Name · Amount</div>
+    </div>
+    <div id="excel-status" style="margin-top:.75rem;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--teal);display:none"></div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Step 2 — Load QuickBooks data</div>
+    <div style="display:flex;gap:.75rem;flex-wrap:wrap;align-items:center">
+      <button class="btn btn-primary" id="load-btn" onclick="loadQB()" disabled>Load QB Pending Transactions</button>
+      <span id="qb-status" style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--text-muted)">Upload spreadsheet first</span>
+    </div>
+    <div id="log"></div>
+  </div>
+
+  <div id="results" style="display:none">
+    <div class="summary" id="summary"></div>
+    <div class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;flex-wrap:wrap;gap:.75rem">
+        <div class="card-title" style="margin-bottom:0">Matches</div>
+        <div class="actions" style="margin-top:0">
+          <label style="font-family:'IBM Plex Mono',monospace;font-size:11px;display:flex;align-items:center;gap:6px;cursor:pointer">
+            <input type="checkbox" id="select-all" onchange="toggleAll(this)"> Select all ready
+          </label>
+          <button class="btn btn-primary" id="confirm-btn" onclick="confirmSelected()" disabled>Confirm Selected</button>
+        </div>
+      </div>
+      <div style="overflow-x:auto">
+        <table id="match-table">
+          <thead>
+            <tr>
+              <th></th>
+              <th>Date</th>
+              <th>Bank Description</th>
+              <th>Amount</th>
+              <th>Matched To (QB Payment)</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="match-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+let excelData = [];   // [{type:'check'/'zelle', ref:'179', lastName:'Sloss', amount:1200}]
+let matchRows = [];   // [{bankTxn, qbPayment, status:'ready'/'skip'/'multi'}]
+
+function log(msg) {
+  const el = document.getElementById('log');
+  el.style.display = '';
+  el.innerHTML += `<div>${msg}</div>`;
+  el.scrollTop = el.scrollHeight;
+}
+
+function loadExcel(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    const wb = XLSX.read(e.target.result, { type: 'array' });
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: null });
+
+    excelData = [];
+    let section = 'check';
+
+    rows.forEach(row => {
+      if (!row || row.every(c => c === null)) return;
+      const cell0 = String(row[0] || '').trim().toLowerCase();
+      if (cell0 === 'zelle') { section = 'zelle'; return; }
+      if (cell0 === 'check number' || cell0 === 'check number ') return; // header row
+
+      const ref    = String(row[0] || '').trim();
+      const name   = String(row[1] || '').trim();
+      const amount = parseFloat(String(row[2] || '0').replace(/[$,]/g, ''));
+
+      if (!ref || !name || isNaN(amount) || amount <= 0) return;
+
+      excelData.push({ type: section, ref, lastName: name.toLowerCase(), amount });
+    });
+
+    document.getElementById('upload-zone').classList.add('done');
+    document.getElementById('upload-label').textContent = '✓ ' + file.name;
+    const status = document.getElementById('excel-status');
+    status.style.display = '';
+    const checks = excelData.filter(r => r.type === 'check').length;
+    const zelles = excelData.filter(r => r.type === 'zelle').length;
+    status.textContent = `${excelData.length} entries loaded — ${checks} checks, ${zelles} Zelle`;
+
+    document.getElementById('load-btn').disabled = false;
+    document.getElementById('qb-status').textContent = 'Ready — click to load QB data';
+  };
+  reader.readAsArrayBuffer(file);
+  input.value = '';
+}
+
+async function loadQB() {
+  const btn = document.getElementById('load-btn');
+  btn.disabled = true;
+  btn.textContent = 'Loading…';
+  document.getElementById('qb-status').textContent = '';
+
+  try {
+    log('Fetching pending QB bank transactions…');
+    const txnResp = await fetch('/api/qb/bank-transactions');
+    const txnData = await txnResp.json();
+    if (txnData.error) throw new Error(JSON.stringify(txnData.error));
+    const pending = txnData.transactions || [];
+    log(`Found ${pending.length} pending bank transactions.`);
+
+    log('Fetching QB payments (last 90 days)…');
+    const minDate = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
+    const payResp = await fetch(`/api/qb/payments?minDate=${minDate}`);
+    const payData = await payResp.json();
+    if (payData.error) throw new Error(JSON.stringify(payData.error));
+    const payments = payData.payments || [];
+    log(`Found ${payments.length} QB payments.`);
+
+    log('Matching…');
+    buildMatches(pending, payments);
+
+  } catch (err) {
+    log('⚠ Error: ' + err.message);
+    btn.disabled = false;
+    btn.textContent = 'Retry';
+  }
+}
+
+function normName(s) {
+  return (s || '').toLowerCase().replace(/[^a-z]/g, '');
+}
+
+function buildMatches(pending, payments) {
+  // Build excel lookup: by ref (check# or zelle code) and by lastName
+  const byRef      = {};
+  const byLastName = {};
+  excelData.forEach(e => {
+    byRef[e.ref.toLowerCase()] = e;
+    if (!byLastName[e.lastName]) byLastName[e.lastName] = [];
+    byLastName[e.lastName].push(e);
+  });
+
+  matchRows = [];
+
+  pending.forEach(txn => {
+    // Skip ATM batch deposits (no clear individual payee, large lump sums)
+    const isAtmBatch = /atm deposit/i.test(txn.description) && !txn.entityRef;
+
+    let excelEntry = null;
+    let matchMethod = '';
+
+    // 1. Try matching by Zelle confirmation code in description
+    const confMatch = txn.description.match(/conf#?\s*([A-Z0-9]{6,})/i);
+    if (confMatch) {
+      const code = confMatch[1].toLowerCase();
+      if (byRef[code]) { excelEntry = byRef[code]; matchMethod = 'zelle-conf'; }
+    }
+
+    // 2. Try matching by check number (from suggestedMatches refNum or entityRef)
+    if (!excelEntry) {
+      const sugRef = txn.suggestedMatches?.[0]?.txnId;
+      // Also try any number embedded in description
+      const checkNumMatch = txn.description.match(/\b(\d{3,5})\b/);
+      const candidates = [sugRef, checkNumMatch?.[1]].filter(Boolean);
+      for (const c of candidates) {
+        if (byRef[String(c).toLowerCase()]) { excelEntry = byRef[String(c).toLowerCase()]; matchMethod = 'check-ref'; break; }
+      }
+    }
+
+    // 3. Try matching by last name from entityRef or description
+    if (!excelEntry) {
+      const nameSource = txn.entityRef || txn.description;
+      // Extract last word(s) that could be a surname
+      const words = nameSource.split(/\s+/).map(normName).filter(w => w.length > 2);
+      for (const word of words) {
+        if (byLastName[word]) {
+          // Narrow by amount
+          const byAmt = byLastName[word].filter(e => Math.abs(e.amount - txn.amount) < 0.02);
+          if (byAmt.length === 1) { excelEntry = byAmt[0]; matchMethod = 'name+amount'; break; }
+          if (byAmt.length === 0 && byLastName[word].length === 1) { excelEntry = byLastName[word][0]; matchMethod = 'name-only'; break; }
+        }
+      }
+    }
+
+    if (!excelEntry && isAtmBatch) {
+      matchRows.push({ txn, excelEntry: null, qbPayment: null, status: 'atm-batch', matchMethod: '' });
+      return;
+    }
+
+    if (!excelEntry) {
+      // Check if QB already has a single clean suggested match — could be a warranty company payment
+      if (txn.suggestedMatches?.length === 1) {
+        matchRows.push({ txn, excelEntry: null, qbPayment: null, status: 'suggested', matchMethod: 'qb-suggestion', suggestedMatch: txn.suggestedMatches[0] });
+      } else {
+        matchRows.push({ txn, excelEntry: null, qbPayment: null, status: 'no-match', matchMethod: '' });
+      }
+      return;
+    }
+
+    // Find QB payment for this entry
+    const qbPayment = findQBPayment(excelEntry, payments);
+
+    if (!qbPayment) {
+      matchRows.push({ txn, excelEntry, qbPayment: null, status: 'no-payment', matchMethod });
+      return;
+    }
+
+    matchRows.push({ txn, excelEntry, qbPayment, status: 'ready', matchMethod });
+  });
+
+  renderTable();
+}
+
+function findQBPayment(entry, payments) {
+  // Try by ref number first
+  const byRef = payments.find(p =>
+    p.refNum && p.refNum.toLowerCase().replace(/[^a-z0-9]/g, '') === entry.ref.toLowerCase().replace(/[^a-z0-9]/g, '') &&
+    Math.abs(p.amount - entry.amount) < 0.02
+  );
+  if (byRef) return byRef;
+
+  // Try by customer last name + amount
+  const byName = payments.filter(p => {
+    const custNorm = normName(p.customer);
+    const lastNorm = normName(entry.lastName);
+    return custNorm.includes(lastNorm) && Math.abs(p.amount - entry.amount) < 0.02;
+  });
+  if (byName.length === 1) return byName[0];
+
+  return null;
+}
+
+const fmt = n => n == null ? '—' : '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+function renderTable() {
+  const ready    = matchRows.filter(r => r.status === 'ready').length;
+  const noPayment = matchRows.filter(r => r.status === 'no-payment').length;
+  const skipped  = matchRows.filter(r => ['no-match','atm-batch'].includes(r.status)).length;
+  const suggested = matchRows.filter(r => r.status === 'suggested').length;
+
+  document.getElementById('summary').innerHTML = `
+    <div class="summary-chip green"><b>${ready}</b>Ready to confirm</div>
+    <div class="summary-chip amber"><b>${suggested}</b>QB suggestion (no Excel match)</div>
+    <div class="summary-chip amber"><b>${noPayment}</b>Excel match but not in Jobber yet</div>
+    <div class="summary-chip muted"><b>${skipped}</b>Skipped (ATM batch / no match)</div>
+  `;
+
+  const tbody = document.getElementById('match-body');
+  tbody.innerHTML = '';
+
+  matchRows.forEach((row, i) => {
+    const { txn, excelEntry, qbPayment, status, matchMethod, suggestedMatch } = row;
+    const isReady = status === 'ready';
+    const isSuggested = status === 'suggested';
+    const canConfirm = isReady || isSuggested;
+
+    let tag = '';
+    let matchInfo = '';
+
+    if (status === 'ready') {
+      tag = `<span class="tag tag-green">Ready</span>`;
+      matchInfo = `<div class="name">${qbPayment.customer}</div>
+        <div class="ref">${qbPayment.refNum ? 'Ref: ' + qbPayment.refNum + ' · ' : ''}${qbPayment.txnDate} · ${fmt(qbPayment.amount)}</div>
+        <div class="ref" style="color:#86a">via ${matchMethod}</div>`;
+    } else if (status === 'suggested') {
+      tag = `<span class="tag tag-amber">QB Suggestion</span>`;
+      matchInfo = `<div class="name">${suggestedMatch?.entityName || '—'}</div>
+        <div class="ref">${suggestedMatch?.txnDate || ''} · ${fmt(suggestedMatch?.amount)}</div>`;
+    } else if (status === 'no-payment') {
+      tag = `<span class="tag tag-amber">Not in Jobber</span>`;
+      matchInfo = `<div class="ref">Check ${excelEntry.ref} · ${excelEntry.lastName} · ${fmt(excelEntry.amount)}<br>No QB payment found — apply in Jobber first</div>`;
+    } else if (status === 'atm-batch') {
+      tag = `<span class="tag tag-muted">ATM Batch</span>`;
+      matchInfo = `<span style="color:var(--text-muted);font-size:11px">Lump deposit — match manually in QB</span>`;
+    } else {
+      tag = `<span class="tag tag-muted">Skip</span>`;
+      matchInfo = `<span style="color:var(--text-muted);font-size:11px">No match found in spreadsheet</span>`;
+    }
+
+    const tr = document.createElement('tr');
+    tr.className = isReady ? 'ready' : (status === 'no-payment' || status === 'no-match' ? 'skip' : '');
+    tr.dataset.index = i;
+    tr.innerHTML = `
+      <td><input type="checkbox" class="row-check" data-index="${i}" ${canConfirm ? '' : 'disabled'} onchange="updateConfirmBtn()"></td>
+      <td style="white-space:nowrap;font-family:'IBM Plex Mono',monospace;font-size:11px">${txn.txnDate}</td>
+      <td>
+        <div class="name">${txn.entityRef || txn.description.substring(0, 60)}</div>
+        <div class="ref">${txn.entityRef ? txn.description.substring(0, 60) : ''}</div>
+        ${excelEntry ? `<div class="ref" style="color:var(--teal)">Check ${excelEntry.ref} · ${excelEntry.lastName}</div>` : ''}
+      </td>
+      <td style="font-family:'IBM Plex Mono',monospace;font-weight:600">${fmt(txn.amount)}</td>
+      <td>${matchInfo}</td>
+      <td>${tag}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  document.getElementById('results').style.display = '';
+  document.getElementById('load-btn').textContent = 'Reload QB Data';
+  document.getElementById('load-btn').disabled = false;
+  document.getElementById('qb-status').textContent = `${matchRows.length} transactions processed`;
+
+  log(`Done. ${ready} ready, ${noPayment} need Jobber first, ${skipped} skipped.`);
+}
+
+function toggleAll(cb) {
+  document.querySelectorAll('.row-check:not(:disabled)').forEach(c => c.checked = cb.checked);
+  updateConfirmBtn();
+}
+
+function updateConfirmBtn() {
+  const count = [...document.querySelectorAll('.row-check:checked')].length;
+  const btn = document.getElementById('confirm-btn');
+  btn.disabled = count === 0;
+  btn.textContent = count > 0 ? `Confirm ${count} Selected` : 'Confirm Selected';
+}
+
+async function confirmSelected() {
+  const checked = [...document.querySelectorAll('.row-check:checked')].map(c => parseInt(c.dataset.index));
+  if (checked.length === 0) return;
+
+  const btn = document.getElementById('confirm-btn');
+  btn.disabled = true;
+  btn.textContent = 'Confirming…';
+
+  let done = 0, failed = 0;
+
+  for (const i of checked) {
+    const row = matchRows[i];
+    const bankTxnId = row.txn.id;
+    let paymentId = row.qbPayment?.id || row.suggestedMatch?.txnId;
+
+    if (!bankTxnId || !paymentId) { failed++; continue; }
+
+    try {
+      const resp = await fetch('/api/qb/match', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bankTxnId, paymentId })
+      });
+      const result = await resp.json();
+      if (result.ok) {
+        done++;
+        log(`✓ Matched: ${row.txn.entityRef || row.txn.description.substring(0,40)} · ${fmt(row.txn.amount)}`);
+        // Mark row as done in UI
+        const tr = document.querySelector(`tr[data-index="${i}"]`);
+        if (tr) tr.style.opacity = '0.4';
+      } else {
+        failed++;
+        log(`✗ Failed: ${row.txn.entityRef || ''} — ${JSON.stringify(result.error)}`);
+      }
+    } catch (err) {
+      failed++;
+      log(`✗ Error: ${err.message}`);
+    }
+  }
+
+  log(`Finished: ${done} confirmed, ${failed} failed.`);
+  btn.textContent = `Done — ${done} confirmed`;
+}
+</script>
+</body>
+</html>

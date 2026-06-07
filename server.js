@@ -290,7 +290,7 @@ app.get('/api/qb/payments', async (req, res) => {
 app.get('/api/qb/bank-transactions', async (req, res) => {
   try {
     const { token, realmId } = await getValidQbToken();
-    const query = `SELECT * FROM BankTransaction WHERE TxnStatus = 'PENDING' MAXRESULTS 100`;
+    const query = `SELECT * FROM BankTransaction WHERE TxnStatus = 'PENDING' MAXRESULTS 200`;
     const url = `${QB_API_BASE}/v3/company/${realmId}/query?query=${encodeURIComponent(query)}&minorversion=65`;
     const resp = await fetch(url, { headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' } });
     const data = await resp.json();
@@ -300,7 +300,15 @@ app.get('/api/qb/bank-transactions', async (req, res) => {
       txnDate: t.TxnDate,
       amount: t.Amount,
       description: t.Description || '',
+      entityRef: t.EntityRef?.name || '',
       accountName: t.BankAccountRef?.name || '',
+      suggestedMatches: (t.SuggestedMatchList || []).map(m => ({
+        txnType: m.TxnType,
+        txnId: m.Txn?.Id || '',
+        entityName: m.Txn?.EntityRef?.name || '',
+        txnDate: m.Txn?.TxnDate || '',
+        amount: m.Txn?.Amount || 0,
+      })),
     }));
     res.json({ transactions });
   } catch (err) {
