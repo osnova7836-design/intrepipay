@@ -138,10 +138,18 @@
 
   // ─── API ─────────────────────────────────────────────────────────────────────
 
+  function qbHeaders() {
+    const csrf = (document.cookie.match(/qbo\.csrftoken=([^;]+)/) || [])[1] || '';
+    return {
+      'intuit-csrf-token': csrf,
+      'X-CSRF-Token':      csrf,
+    };
+  }
+
   async function fetchPending() {
     const r = await fetch(
       `${BASE}/getTransactions?accountId=${ACCOUNT_ID}&sort=txnDate&reviewState=PENDING&ignoreMatching=false&txnFilter=MONEY_IN`,
-      { credentials: 'include' }
+      { credentials: 'include', headers: qbHeaders() }
     );
     if (!r.ok) throw new Error(`getTransactions HTTP ${r.status}`);
     const d = await r.json();
@@ -168,7 +176,7 @@
     };
     const r = await fetch(`${BASE}/acceptTransactions`, {
       method: 'POST', credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...qbHeaders() },
       body: JSON.stringify(body),
     });
     return { ok: r.ok, status: r.status, text: r.ok ? null : await r.text() };
