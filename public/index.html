@@ -1590,12 +1590,20 @@ function parseRemittance(remit, company) {
 
 function lookupJobber(ref, company, secondaryRef) {
   const coLower = (company||'').toLowerCase();
+  const coKeywords = coLower.split(/[\s\/\-]+/).filter(w => w.length > 3);
+
+  // Only enforce client-name filtering for companies that actually have a Jobber client account.
+  // If no invoice in the full dataset has a client matching the company name, the company's
+  // invoices are filed under homeowners — skip the filter to avoid false "missing" results.
+  const coHasOwnClient = coKeywords.length > 0 && jobberRows.some(row => {
+    const client = String(row['Client name']||'').toLowerCase();
+    return coKeywords.some(kw => client.includes(kw));
+  });
 
   // Helper: pick best row from candidates by client name match, then highest invoice #
   function bestMatch(rows) {
     if (!rows || rows.length === 0) return null;
-    const coKeywords = coLower.split(/[\s\/\-]+/).filter(w => w.length > 3);
-    if (coKeywords.length > 0) {
+    if (coHasOwnClient) {
       const clientMatches = rows.filter(row => {
         const client = String(row['Client name']||'').toLowerCase();
         return coKeywords.some(kw => client.includes(kw));
@@ -1627,9 +1635,11 @@ function lookupJobber(ref, company, secondaryRef) {
     if (stripped.length > 6 && jobberMap[stripped]) return bestMatch(jobberMap[stripped]);
   }
 
-  // Rheem: try all WCNs (primary + secondary) with exact then partial Subject match
+  // Rheem: try all WCNs — ref may be comma-joined ("2603110023,2603130027") from collector
   if (coLower.includes('rheem')) {
-    const allWcns = [ref, ...(secondaryRef ? (secondaryRef.match(/\b260\d{7,8}\b/g)||[]) : [])];
+    const refWcns = ref.match(/\b260\d{7,8}\b/g) || [ref];
+    const secWcns = secondaryRef ? (secondaryRef.match(/\b260\d{7,8}\b/g) || []) : [];
+    const allWcns = [...new Set([...refWcns, ...secWcns])];
     for (const wcn of allWcns) {
       if (jobberMap[wcn]) return bestMatch(jobberMap[wcn]);
     }
