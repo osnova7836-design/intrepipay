@@ -291,7 +291,7 @@ app.get('/api/qb/bank-transactions', async (req, res) => {
   try {
     const { token, realmId } = await getValidQbToken();
     // BankTransaction is not a queryable entity — use the dedicated REST endpoint
-    const url = `${QB_API_BASE}/v3/company/${realmId}/banktransaction?minorversion=65`;
+    const url = `${QB_API_BASE}/v3/company/${realmId}/banktransactions?minorversion=65`;
     const resp = await fetch(url, { headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' } });
     const data = await resp.json();
     if (!resp.ok) return res.status(resp.status).json({ error: data });
