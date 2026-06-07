@@ -35,12 +35,23 @@ app.use(express.static(path.join(__dirname, 'public'), { etag: false, lastModifi
 const {
   JOBBER_CLIENT_ID,
   JOBBER_CLIENT_SECRET,
+  QUICKBOOKS_CLIENT_ID,
+  QUICKBOOKS_CLIENT_SECRET,
   APP_URL = 'https://intrepipay.com'
 } = process.env;
 
 const REDIRECT_URI = `${APP_URL}/auth/jobber/callback`;
 const TOKEN_URL = 'https://api.getjobber.com/api/oauth/token';
 const GRAPHQL_URL = 'https://api.getjobber.com/api/graphql';
+
+// ── QuickBooks constants ──────────────────────────────────────────────────────
+const QB_REDIRECT_URI   = `${APP_URL}/auth/quickbooks/callback`;
+const QB_TOKEN_URL      = 'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer';
+const QB_AUTH_URL       = 'https://appcenter.intuit.com/connect/oauth2';
+const QB_SCOPES         = 'com.intuit.quickbooks.accounting';
+const QB_API_BASE       = process.env.QB_SANDBOX === 'false'
+  ? 'https://quickbooks.api.intuit.com'
+  : 'https://sandbox-quickbooks.api.intuit.com';
 
 // ── Persistent token storage ──────────────────────────────────────────────────
 const TOKEN_FILE = path.join(__dirname, 'tokens.json');
@@ -145,6 +156,178 @@ async function getValidToken() {
 
   return tokenStore.access_token;
 }
+
+// ── QuickBooks OAuth ──────────────────────────────────────────────────────────
+const QB_TOKEN_FILE = path.join(__dirname, 'qb-tokens.json');
+
+function loadQbTokens() {
+  try {
+    if (fs.existsSync(QB_TOKEN_FILE)) return JSON.parse(fs.readFileSync(QB_TOKEN_FILE, 'utf8'));
+  } catch (e) { console.error('QB token load error:', e.message); }
+  return { access_token: null, refresh_token: null, expires_at: null, realm_id: null };
+}
+
+function saveQbTokens(tokens) {
+  try { fs.writeFileSync(QB_TOKEN_FILE, JSON.stringify(tokens)); }
+  catch (e) { console.error('QB token save error:', e.message); }
+}
+
+let qbTokenStore = loadQbTokens();
+
+app.get('/auth/quickbooks', (req, res) => {
+  if (!QUICKBOOKS_CLIENT_ID) return res.send('QUICKBOOKS_CLIENT_ID not configured');
+  const url = `${QB_AUTH_URL}?` +
+    `client_id=${QUICKBOOKS_CLIENT_ID}` +
+    `&response_type=code` +
+    `&scope=${encodeURIComponent(QB_SCOPES)}` +
+    `&redirect_uri=${encodeURIComponent(QB_REDIRECT_URI)}` +
+    `&state=trackpoint`;
+  res.redirect(url);
+});
+
+app.get('/auth/quickbooks/callback', async (req, res) => {
+  const { code, realmId, error } = req.query;
+  if (error || !code) return res.send('QB authorization failed: ' + (error || 'no code'));
+  try {
+    const credentials = Buffer.from(`${QUICKBOOKS_CLIENT_ID}:${QUICKBOOKS_CLIENT_SECRET}`).toString('base64');
+    const response = await fetch(QB_TOKEN_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Authorization': `Basic ${credentials}`
+      },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: QB_REDIRECT_URI
+      })
+    });
+    const data = await response.json();
+    if (!data.access_token) return res.send('QB token exchange failed: ' + JSON.stringify(data));
+    qbTokenStore = {
+      access_token: data.access_token,
+      refresh_token: data.refresh_token,
+      expires_at: Date.now() + ((data.expires_in || 3600) * 1000),
+      realm_id: realmId
+    };
+    saveQbTokens(qbTokenStore);
+    console.log(`QuickBooks connected — realmId: ${realmId}`);
+    res.redirect('/?qb_connected=true');
+  } catch (err) {
+    console.error('QB OAuth error:', err);
+    res.send('QB OAuth error: ' + err.message);
+  }
+});
+
+async function getValidQbToken() {
+  if (!qbTokenStore.access_token) throw new Error('Not connected to QuickBooks');
+  if (Date.now() > qbTokenStore.expires_at - 60000) {
+    const credentials = Buffer.from(`${QUICKBOOKS_CLIENT_ID}:${QUICKBOOKS_CLIENT_SECRET}`).toString('base64');
+    const response = await fetch(QB_TOKEN_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Authorization': `Basic ${credentials}`
+      },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: qbTokenStore.refresh_token
+      })
+    });
+    let data;
+    try { data = await response.json(); } catch (e) { data = {}; }
+    if (!data.access_token) {
+      qbTokenStore = { access_token: null, refresh_token: null, expires_at: null, realm_id: qbTokenStore.realm_id };
+      saveQbTokens(qbTokenStore);
+      throw new Error('Not connected to QuickBooks');
+    }
+    qbTokenStore = {
+      access_token: data.access_token,
+      refresh_token: data.refresh_token || qbTokenStore.refresh_token,
+      expires_at: Date.now() + ((data.expires_in || 3600) * 1000),
+      realm_id: qbTokenStore.realm_id
+    };
+    saveQbTokens(qbTokenStore);
+  }
+  return { token: qbTokenStore.access_token, realmId: qbTokenStore.realm_id };
+}
+
+app.get('/api/qb/status', (req, res) => {
+  res.json({
+    connected: !!qbTokenStore.access_token,
+    realmId: qbTokenStore.realm_id,
+    expires_at: qbTokenStore.expires_at
+  });
+});
+
+// Fetch QB Payment records in a date range
+app.get('/api/qb/payments', async (req, res) => {
+  try {
+    const { token, realmId } = await getValidQbToken();
+    const today = new Date().toISOString().slice(0, 10);
+    const minDate = req.query.minDate || new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const maxDate = req.query.maxDate || today;
+    const query = `SELECT * FROM Payment WHERE TxnDate >= '${minDate}' AND TxnDate <= '${maxDate}' MAXRESULTS 100`;
+    const url = `${QB_API_BASE}/v3/company/${realmId}/query?query=${encodeURIComponent(query)}&minorversion=65`;
+    const resp = await fetch(url, { headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' } });
+    const data = await resp.json();
+    if (!resp.ok) return res.status(resp.status).json({ error: data });
+    const payments = (data.QueryResponse?.Payment || []).map(p => ({
+      id: p.Id,
+      txnDate: p.TxnDate,
+      amount: p.TotalAmt,
+      customer: p.CustomerRef?.name || '',
+      refNum: p.PaymentRefNum || '',
+      note: p.PrivateNote || '',
+    }));
+    res.json({ payments });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Fetch unmatched bank transactions from QB bank feed
+app.get('/api/qb/bank-transactions', async (req, res) => {
+  try {
+    const { token, realmId } = await getValidQbToken();
+    const query = `SELECT * FROM BankTransaction WHERE TxnStatus = 'PENDING' MAXRESULTS 100`;
+    const url = `${QB_API_BASE}/v3/company/${realmId}/query?query=${encodeURIComponent(query)}&minorversion=65`;
+    const resp = await fetch(url, { headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' } });
+    const data = await resp.json();
+    if (!resp.ok) return res.status(resp.status).json({ error: data });
+    const transactions = (data.QueryResponse?.BankTransaction || []).map(t => ({
+      id: t.Id,
+      txnDate: t.TxnDate,
+      amount: t.Amount,
+      description: t.Description || '',
+      accountName: t.BankAccountRef?.name || '',
+    }));
+    res.json({ transactions });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Match a QB bank transaction to a QB Payment
+app.post('/api/qb/match', async (req, res) => {
+  try {
+    const { token, realmId } = await getValidQbToken();
+    const { bankTxnId, paymentId } = req.body;
+    if (!bankTxnId || !paymentId) return res.status(400).json({ error: 'bankTxnId and paymentId required' });
+    const url = `${QB_API_BASE}/v3/company/${realmId}/banktransactions/batchmatch?minorversion=65`;
+    const body = [{ BankTransactionId: bankTxnId, RecognizedTransaction: [{ TxnType: 'Payment', Txn: { Id: paymentId } }] }];
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const data = await resp.json();
+    if (!resp.ok) return res.status(resp.status).json({ error: data });
+    res.json({ ok: true, result: data });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // ── Step 3: Fetch invoices from Jobber ────────────────────────────────────────
 app.get('/api/invoices', async (req, res) => {
@@ -613,7 +796,8 @@ const collectorSources = (() => {
       lessen:           require('./collector/sources/lessen'),
     };
   } catch (e) {
-    console.warn('Collector sources not available:', e.message);
+    console.error('Collector sources failed to load:', e.message);
+    console.error(e.stack);
     return null;
   }
 })();

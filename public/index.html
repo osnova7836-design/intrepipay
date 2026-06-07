@@ -182,6 +182,7 @@ tr:hover td{background:var(--surface2)}
   </div>
   <div class="header-right">
     <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:rgba(255,255,255,0.4)">IntrepiX Group LLC</span>
+    <button class="key-btn" id="qb-btn" onclick="connectQuickBooks()" title="Connect QuickBooks">QB</button>
     <button class="key-btn" id="key-btn" onclick="manageKey()">🔑 API Key</button>
   </div>
 </header>
@@ -457,6 +458,10 @@ window.addEventListener('DOMContentLoaded', async () => {
     history.replaceState({}, '', '/');
     await fetchJobberInvoices();
   }
+  if (params.get('qb_connected') === 'true') {
+    history.replaceState({}, '', '/');
+  }
+  checkQBStatus();
 });
 
 // ── Step 2: Bank ──────────────────────────────────────────────────────────────
@@ -2438,7 +2443,7 @@ function todayISO() {
   return new Date().toISOString().split('T')[0];
 }
 
-function streamPayment(params, triggerBtn, invoiceNumbers = []) {
+function streamPayment(params, triggerBtn, invoiceNumbers = [], qbMatchAmount = 0, qbMatchDate = '') {
   const overlay = document.createElement('div');
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:200;display:flex;align-items:center;justify-content:center;padding:1rem';
   overlay.innerHTML = `
@@ -2500,7 +2505,13 @@ function streamPayment(params, triggerBtn, invoiceNumbers = []) {
       resultEl.style.display = '';
       if (msg.success) {
         markInvoicesPaid(invoiceNumbers);
-        resultEl.innerHTML = `<div style="background:#15803d;border-radius:6px;padding:.75rem 1rem;font-family:'IBM Plex Mono',monospace;font-size:12px;color:#fff;letter-spacing:0.04em">✓ Payment submitted successfully</div>`;
+        const qbHint = qbConnected
+          ? `<button onclick="matchInQB(${JSON.stringify(qbMatchAmount)},${JSON.stringify(qbMatchDate)});this.closest('[style*=fixed]').remove()"
+              style="margin-top:.5rem;padding:6px 14px;border-radius:6px;font-family:'IBM Plex Mono',monospace;font-size:10px;cursor:pointer;border:none;background:rgba(0,122,99,0.3);color:#86efac;letter-spacing:.06em;text-transform:uppercase">
+              Match in QuickBooks →
+            </button>`
+          : '';
+        resultEl.innerHTML = `<div style="background:#15803d;border-radius:6px;padding:.75rem 1rem;font-family:'IBM Plex Mono',monospace;font-size:12px;color:#fff;letter-spacing:0.04em">✓ Payment submitted successfully</div>${qbHint}`;
         if (triggerBtn) { triggerBtn.textContent = '✓ Applied'; triggerBtn.disabled = true; }
       } else {
         resultEl.innerHTML = `<div style="background:#b91c1c;border-radius:6px;padding:.75rem 1rem;font-family:'IBM Plex Mono',monospace;font-size:12px;color:#fff">✗ ${msg.error || 'Unknown error'}</div>`;
@@ -2661,6 +2672,134 @@ async function applyOne(invoiceNumber, _unused, ref, btn) {
   }
 }
 
+// ── QuickBooks ────────────────────────────────────────────────────────────────
+let qbConnected = false;
+
+async function checkQBStatus() {
+  try {
+    const resp = await fetch('/api/qb/status');
+    const s = await resp.json();
+    qbConnected = !!s.connected;
+    _updateQBBtn();
+  } catch (e) {}
+}
+
+function _updateQBBtn() {
+  const btn = el('qb-btn');
+  if (!btn) return;
+  if (qbConnected) {
+    btn.textContent = 'QB ✓';
+    btn.style.color = '#86efac';
+    btn.style.borderColor = 'rgba(134,239,172,0.35)';
+  } else {
+    btn.textContent = 'QB';
+    btn.style.color = '';
+    btn.style.borderColor = '';
+  }
+}
+
+function connectQuickBooks() {
+  if (qbConnected) {
+    alert('QuickBooks is connected.\n\nTo reconnect with a different company, visit /auth/quickbooks in your browser.');
+    return;
+  }
+  window.location.href = '/auth/quickbooks';
+}
+
+async function matchInQB(amount, txnDate) {
+  if (!qbConnected) {
+    if (confirm('QuickBooks is not connected. Connect now?')) window.location.href = '/auth/quickbooks';
+    return;
+  }
+
+  const d = txnDate ? new Date(txnDate + 'T12:00:00') : new Date();
+  const minDate = new Date(d - 7 * 86400000).toISOString().slice(0, 10);
+  const maxDate = new Date(d.getTime() + 7 * 86400000).toISOString().slice(0, 10);
+
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:200;display:flex;align-items:center;justify-content:center;padding:1rem';
+  overlay.innerHTML = `
+    <div style="background:#1c1917;border-radius:12px;padding:1.5rem;width:100%;max-width:520px;box-shadow:0 8px 32px rgba(0,0,0,0.4)">
+      <div style="font-family:'Playfair Display',serif;font-size:18px;color:#fff;margin-bottom:1rem">Match in QuickBooks</div>
+      <div id="qbm-body" style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:rgba(255,255,255,0.55)">
+        Searching for ${fmt(amount)} around ${txnDate || 'today'}…
+      </div>
+      <div style="margin-top:1.25rem;display:flex;justify-content:flex-end;gap:8px">
+        <button onclick="this.closest('[style*=fixed]').remove()"
+          style="padding:8px 18px;border-radius:6px;font-family:'IBM Plex Mono',monospace;font-size:11px;cursor:pointer;border:1px solid rgba(255,255,255,0.2);background:none;color:rgba(255,255,255,0.7)">Close</button>
+        <button id="qbm-confirm" style="display:none;padding:8px 18px;border-radius:6px;font-family:'IBM Plex Mono',monospace;font-size:11px;cursor:pointer;border:none;background:var(--teal);color:#fff">Confirm Match</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  const body = overlay.querySelector('#qbm-body');
+  const confirmBtn = overlay.querySelector('#qbm-confirm');
+
+  try {
+    const [pr, br] = await Promise.all([
+      fetch(`/api/qb/payments?minDate=${minDate}&maxDate=${maxDate}`).then(r => r.json()),
+      fetch('/api/qb/bank-transactions').then(r => r.json())
+    ]);
+
+    const matchedPayment = (pr.payments || []).find(p => Math.abs(p.amount - amount) < 0.02);
+    const matchedTxn     = (br.transactions || []).find(t => Math.abs(t.amount - amount) < 0.02);
+
+    let html = '';
+
+    if (matchedPayment) {
+      html += `<div style="background:rgba(0,122,99,0.2);border:1px solid rgba(0,122,99,0.4);border-radius:8px;padding:.75rem 1rem;margin-bottom:.625rem">
+        <div style="color:#86efac;font-size:9px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:.3rem">QB Payment (from Jobber sync)</div>
+        <div style="color:#fff">${fmt(matchedPayment.amount)} · ${matchedPayment.customer}</div>
+        <div style="color:rgba(255,255,255,0.4);font-size:10px">${matchedPayment.txnDate}${matchedPayment.refNum ? ' · Ref: ' + matchedPayment.refNum : ''}</div>
+      </div>`;
+    } else {
+      html += `<div style="color:rgba(255,255,255,0.4);margin-bottom:.625rem">No QB payment found for ${fmt(amount)} in this date window.<br><span style="font-size:10px">The Jobber→QB sync may take a few minutes. Try again shortly.</span></div>`;
+    }
+
+    if (matchedTxn) {
+      html += `<div style="background:rgba(0,122,99,0.2);border:1px solid rgba(0,122,99,0.4);border-radius:8px;padding:.75rem 1rem">
+        <div style="color:#86efac;font-size:9px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:.3rem">Bank deposit (unmatched)</div>
+        <div style="color:#fff">${fmt(matchedTxn.amount)} · ${matchedTxn.description || 'Deposit'}</div>
+        <div style="color:rgba(255,255,255,0.4);font-size:10px">${matchedTxn.txnDate}${matchedTxn.accountName ? ' · ' + matchedTxn.accountName : ''}</div>
+      </div>`;
+    } else {
+      html += `<div style="color:rgba(255,255,255,0.4);margin-top:.5rem;font-size:10px">No unmatched bank deposit found for this amount — it may already be matched or may not have cleared yet.</div>`;
+    }
+
+    body.innerHTML = html;
+
+    if (matchedPayment && matchedTxn) {
+      confirmBtn.style.display = '';
+      confirmBtn.onclick = async () => {
+        confirmBtn.disabled = true;
+        confirmBtn.textContent = 'Matching…';
+        try {
+          const r = await fetch('/api/qb/match', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ bankTxnId: matchedTxn.id, paymentId: matchedPayment.id })
+          });
+          const result = await r.json();
+          if (result.ok) {
+            body.innerHTML += `<div style="margin-top:.75rem;background:#15803d;border-radius:6px;padding:.625rem .875rem;color:#fff;font-family:'IBM Plex Mono',monospace;font-size:11px">✓ Matched in QuickBooks</div>`;
+            confirmBtn.remove();
+          } else {
+            body.innerHTML += `<div style="margin-top:.75rem;color:#fca5a5;font-family:'IBM Plex Mono',monospace;font-size:11px">Match failed: ${JSON.stringify(result.error)}</div>`;
+            confirmBtn.textContent = 'Retry';
+            confirmBtn.disabled = false;
+          }
+        } catch (err) {
+          body.innerHTML += `<div style="margin-top:.75rem;color:#fca5a5;font-family:'IBM Plex Mono',monospace;font-size:11px">Error: ${err.message}</div>`;
+          confirmBtn.textContent = 'Retry';
+          confirmBtn.disabled = false;
+        }
+      };
+    }
+  } catch (err) {
+    body.innerHTML = `<div style="color:#fca5a5">Error: ${err.message}</div>`;
+  }
+}
+
 async function applyAll(ref, co, btn) {
   const block = btn.closest('.pblock');
   const dateInput = block.querySelector('input[type=date]');
@@ -2709,12 +2848,13 @@ async function applyAll(ref, co, btn) {
         sum + (i.status === 'overpay' ? i.jobber_amount : Math.abs(i.remittance_amount)), 0
       );
       const params = new URLSearchParams({ clientId: clientDbId, invoiceIds: invoiceDbIds.join(','), type: payType, ref: confirmedRef, date, amount: totalAmount.toFixed(2) });
-      streamPayment(params, btn, invoiceNumbers);
+      streamPayment(params, btn, invoiceNumbers, totalAmount, date);
     }, skipNote, ref);
   } else {
     confirmPaymentDate(paymentDate, invoiceDbIds.length, (date, confirmedRef) => {
       const params = new URLSearchParams({ clientId: clientDbId, invoiceIds: invoiceDbIds.join(','), type: payType, ref: confirmedRef, date });
-      streamPayment(params, btn, invoiceNumbers);
+      const totalAmount = result.total_paid || 0;
+      streamPayment(params, btn, invoiceNumbers, totalAmount, date);
     }, skipNote, ref);
   }
 }
