@@ -138,24 +138,32 @@
 
   // ─── API ─────────────────────────────────────────────────────────────────────
 
-  const QB_API_KEY = 'prdakyresxaDrhFXaSARXaUdj1S8M7h6YK7YGekc';
+  let _authHeaders = null;
+
+  // Intercept QB's own next API call to capture its auth headers, then restore fetch.
+  function captureAuthHeaders() {
+    return new Promise((resolve, reject) => {
+      const orig = window.fetch;
+      const timeout = setTimeout(() => {
+        window.fetch = orig;
+        reject(new Error('Timed out — try changing a date filter in QB Banking to trigger a refresh.'));
+      }, 30000);
+      window.fetch = function (url, opts) {
+        if (!_authHeaders && String(url).includes('/olb/ng/') && opts?.headers?.authorization) {
+          _authHeaders = { ...opts.headers };
+          delete _authHeaders['x-range'];
+          clearTimeout(timeout);
+          window.fetch = orig;
+          resolve();
+        }
+        return orig.apply(this, arguments);
+      };
+    });
+  }
 
   function qbHeaders(range) {
-    const csrf  = (document.cookie.match(/qbo\.csrftoken=([^;]+)/)          || [])[1] || '';
-    const xcsrf = (document.cookie.match(/qbo\.xcsrfderivationkey=([^;]+)/) || [])[1] || '';
-    const uid   = (document.cookie.match(/userIdentifier=([^;]+)/)           || [])[1] || '';
-    const tid   = typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : Math.random().toString(36).slice(2);
-    const h = {
-      'apikey':            QB_API_KEY,
-      'authorization':     `Intuit_APIKey intuit_apikey=${QB_API_KEY}, intuit_apikey_version=1.0`,
-      'authtype':          'browser_auth',
-      'csrftoken':         csrf,
-      'intuit-company-id': COMPANY_ID,
-      'intuit-plugin-id':  'integrations-datain-ui',
-      'intuit-user-id':    uid,
-      'intuit_tid':        tid,
-      'x-csrf-token':      xcsrf,
-    };
+    const tid = typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : Math.random().toString(36).slice(2);
+    const h = { ...(_authHeaders || {}), intuit_tid: tid };
     if (range) h['x-range'] = range;
     return h;
   }
@@ -418,8 +426,9 @@
   // ─── Main ────────────────────────────────────────────────────────────────────
 
   buildPanel();
+  $('qbmt-stats').innerHTML = `<span style="font-size:12px;color:#6b7280">⏳ Change any date filter in QB Banking (or click its Refresh button) to authorize…</span>`;
 
-  fetchPending().then(items => {
+  captureAuthHeaders().then(() => fetchPending()).then(items => {
     rows = items.map(txn => {
       const parsed = parseDesc(txn.origDescription, txn.description);
       const { s, conf } = findMatch(txn, parsed);
