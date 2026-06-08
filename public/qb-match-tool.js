@@ -250,6 +250,13 @@
     #qbmt-log{font-family:monospace;font-size:10px;color:#6b7280;padding:8px 18px;
       background:#f9fafb;border-top:1px solid #e5e7eb;max-height:80px;overflow-y:auto;
       display:none;flex-shrink:0}
+    #qbmt-setup{padding:20px 24px 16px}
+    #qbmt-setup p{font-size:13px;font-weight:600;margin-bottom:10px;color:#111827}
+    #qbmt-setup ol{font-size:12px;color:#374151;line-height:2;padding-left:18px}
+    #qbmt-setup code{background:#f3f4f6;padding:1px 5px;border-radius:4px;font-family:monospace}
+    #qbmt-setup-paste{width:100%;height:90px;font-family:monospace;font-size:11px;
+      padding:8px;border:1px solid #d1d5db;border-radius:6px;resize:vertical;
+      margin:10px 0 8px;display:block}
   `;
 
   function buildPanel() {
@@ -263,24 +270,41 @@
         <h2>QB Match Tool &nbsp;<span id="qbmt-count" style="font-weight:400;opacity:.6;font-size:13px"></span></h2>
         <button onclick="document.getElementById('qbmt-panel').remove()" title="Close">✕</button>
       </div>
-      <div id="qbmt-stats"><span style="font-size:12px;color:#6b7280">Loading transactions…</span></div>
-      <div id="qbmt-body">
-        <table id="qbmt-table">
-          <thead><tr>
-            <th style="width:32px"><input type="checkbox" id="qbmt-all" onchange="qbmtToggleAll(this)"></th>
-            <th>Date</th>
-            <th>Bank Description</th>
-            <th>Amount</th>
-            <th>Matched QB Payment</th>
-            <th>Status</th>
-          </tr></thead>
-          <tbody id="qbmt-tbody"></tbody>
-        </table>
+      <div id="qbmt-setup">
+        <p>Quick setup — do this once each session:</p>
+        <ol>
+          <li>Open the <strong>Network</strong> tab (F12 → Network)</li>
+          <li>In the filter box type <code>getTransactions</code></li>
+          <li>Find any request with <strong style="color:#15803d">200</strong> status and right-click it</li>
+          <li>Choose <strong>Copy → Copy as fetch</strong></li>
+          <li>Paste it below and click <strong>Go</strong></li>
+        </ol>
+        <textarea id="qbmt-setup-paste" placeholder="Paste Copy as fetch here…"></textarea>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="qbmt-btn qbmt-btn-primary" onclick="qbmtAuthorize()">Go →</button>
+          <span id="qbmt-setup-err" style="font-size:11px;color:#b91c1c"></span>
+        </div>
       </div>
-      <div id="qbmt-foot">
-        <button class="qbmt-btn qbmt-btn-primary" id="qbmt-confirm" onclick="qbmtConfirm()" disabled>Confirm Selected</button>
-        <button class="qbmt-btn qbmt-btn-ghost" onclick="qbmtSelectAuto()">Select Auto-Matches</button>
-        <span id="qbmt-sel-lbl" style="font-size:11px;color:#6b7280;margin-left:auto"></span>
+      <div id="qbmt-main" style="display:none;flex-direction:column;flex:1;overflow:hidden">
+        <div id="qbmt-stats"></div>
+        <div id="qbmt-body">
+          <table id="qbmt-table">
+            <thead><tr>
+              <th style="width:32px"><input type="checkbox" id="qbmt-all" onchange="qbmtToggleAll(this)"></th>
+              <th>Date</th>
+              <th>Bank Description</th>
+              <th>Amount</th>
+              <th>Matched QB Payment</th>
+              <th>Status</th>
+            </tr></thead>
+            <tbody id="qbmt-tbody"></tbody>
+          </table>
+        </div>
+        <div id="qbmt-foot">
+          <button class="qbmt-btn qbmt-btn-primary" id="qbmt-confirm" onclick="qbmtConfirm()" disabled>Confirm Selected</button>
+          <button class="qbmt-btn qbmt-btn-ghost" onclick="qbmtSelectAuto()">Select Auto-Matches</button>
+          <span id="qbmt-sel-lbl" style="font-size:11px;color:#6b7280;margin-left:auto"></span>
+        </div>
       </div>
       <div id="qbmt-log"></div>
     `;
@@ -423,20 +447,47 @@
     qbmtLog(`Finished: ${ok} confirmed, ${fail} failed.`);
   };
 
+  window.qbmtAuthorize = function () {
+    const code  = document.getElementById('qbmt-setup-paste').value.trim();
+    const errEl = document.getElementById('qbmt-setup-err');
+    if (!code) { errEl.textContent = 'Paste the Copy as fetch code first.'; return; }
+
+    let headers = null;
+    try {
+      (new Function('fetch', code))(function (url, opts) {
+        headers = { ...(opts?.headers || {}) };
+        return Promise.resolve(new Response('null'));
+      });
+    } catch (e) { /* ignore */ }
+
+    if (!headers?.authorization) {
+      errEl.textContent = 'Could not read auth — make sure it\'s from a getTransactions request.';
+      return;
+    }
+
+    _authHeaders = headers;
+    delete _authHeaders['x-range'];
+
+    document.getElementById('qbmt-setup').style.display = 'none';
+    const main = document.getElementById('qbmt-main');
+    main.style.display = 'flex';
+
+    $('qbmt-stats').innerHTML = '<span style="font-size:12px;color:#6b7280">Loading transactions…</span>';
+
+    fetchPending().then(items => {
+      rows = items.map(txn => {
+        const parsed = parseDesc(txn.origDescription, txn.description);
+        const { s, conf } = findMatch(txn, parsed);
+        return { txn, parsed, s, conf };
+      });
+      renderRows();
+    }).catch(err => {
+      $('qbmt-stats').innerHTML = `<span style="color:#b91c1c;font-size:13px">Error: ${esc(err.message)}</span>`;
+    });
+  };
+
   // ─── Main ────────────────────────────────────────────────────────────────────
 
   buildPanel();
-  $('qbmt-stats').innerHTML = `<span style="font-size:12px;color:#6b7280">⏳ Change any date filter in QB Banking (or click its Refresh button) to authorize…</span>`;
-
-  captureAuthHeaders().then(() => fetchPending()).then(items => {
-    rows = items.map(txn => {
-      const parsed = parseDesc(txn.origDescription, txn.description);
-      const { s, conf } = findMatch(txn, parsed);
-      return { txn, parsed, s, conf };
-    });
-    renderRows();
-  }).catch(err => {
-    $('qbmt-stats').innerHTML = `<span style="color:#b91c1c;font-size:13px">Error: ${esc(err.message)}</span>`;
-  });
 
 })();
