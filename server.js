@@ -795,6 +795,45 @@ app.post('/api/queue-reset', (req, res) => {
   res.json({ ok: true, message: 'Queue cleared and playwrightRunning reset to false' });
 });
 
+// ── QB bank match via Playwright ─────────────────────────────────────────────
+app.get('/api/playwright-qb-match', async (req, res) => {
+  const { ref, name, amount, date } = req.query;
+  if (!ref || !name) {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.flushHeaders();
+    res.write(`data: ${JSON.stringify({ type: 'done', success: false, error: 'ref and name are required' })}\n\n`);
+    res.end();
+    return;
+  }
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  const send = obj => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+  const keepAlive = setInterval(() => res.write(': keep-alive\n\n'), 15000);
+
+  const origLog   = console.log;
+  const origError = console.error;
+  console.log   = (...args) => { origLog.apply(console, args);   send({ type: 'log', text: args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ') }); };
+  console.error = (...args) => { origError.apply(console, args); send({ type: 'log', text: '⚠ ' + args.map(String).join(' ') }); };
+
+  try {
+    const { matchInQbBanking } = require('./scripts/qb-match');
+    await matchInQbBanking({ ref, name, amount: parseFloat(amount) || 0, date });
+    send({ type: 'done', success: true });
+  } catch (err) {
+    send({ type: 'done', success: false, error: err.message });
+  } finally {
+    clearInterval(keepAlive);
+    console.log   = origLog;
+    console.error = origError;
+    res.end();
+  }
+});
+
 // ── Remittance collector (inline) ────────────────────────────────────────────
 const collectorSources = (() => {
   try {
