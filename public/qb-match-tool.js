@@ -170,7 +170,7 @@
 
   async function fetchPending() {
     const r = await fetch(
-      `${BASE}/getTransactions?sort=-txnDate&reviewState=PENDING&ignoreMatching=false&accountId=${ACCOUNT_ID}`,
+      `${BASE}/getTransactions?sort=-txnDate&reviewState=PENDING&ignoreMatching=false&txnFilter=MONEY_IN&accountId=${ACCOUNT_ID}`,
       { credentials: 'include', headers: qbHeaders('items=0-499') }
     );
     if (!r.ok) throw new Error(`getTransactions HTTP ${r.status}`);
