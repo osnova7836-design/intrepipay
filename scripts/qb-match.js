@@ -1,5 +1,6 @@
 const { chromium } = require('playwright');
 const readline = require('readline');
+const path = require('path');
 
 const QB_ORIGIN = 'https://app.qbo.intuit.com';
 const QB_BANKING_URL = `${QB_ORIGIN}/app/banking`;

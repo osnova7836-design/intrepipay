@@ -341,6 +341,122 @@ app.post('/api/qb/match', async (req, res) => {
   }
 });
 
+// Cross-reference bank PDF deposits with QB "For Review" feed — returns match candidates without confirming
+app.post('/api/qb/match-preview', async (req, res) => {
+  try {
+    const { token, realmId } = await getValidQbToken();
+    const bankTxns = req.body.bankTxns || [];
+
+    const url = `${QB_API_BASE}/v3/company/${realmId}/banktransactions?minorversion=65`;
+    const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } });
+    const data = await resp.json();
+    if (!resp.ok) return res.status(resp.status).json({ error: data });
+
+    const rawList = data.BankTransactions || data.BankTransaction || data.QueryResponse?.BankTransaction || [];
+    const qbTxns = rawList
+      .filter(t => !t.TxnStatus || t.TxnStatus === 'PENDING')
+      .map(t => ({
+        id: t.Id,
+        txnDate: t.TxnDate,
+        amount: parseFloat(t.Amount) || 0,
+        description: t.Description || '',
+        suggestedMatches: (t.SuggestedMatchList || []).map(m => ({
+          txnType: m.TxnType,
+          txnId: m.Txn?.Id || '',
+          entityName: m.Txn?.EntityRef?.name || '',
+          txnDate: m.Txn?.TxnDate || '',
+          amount: parseFloat(m.Txn?.Amount) || 0,
+        })),
+      }));
+
+    const results = bankTxns.map(btxn => {
+      let qbMatch = null;
+      let matchMethod = '';
+
+      // ACH: match by payment ID embedded in bank description
+      if (btxn.paymentId) {
+        qbMatch = qbTxns.find(q => q.description.includes(btxn.paymentId));
+        if (qbMatch) matchMethod = 'payment-id';
+      }
+
+      // Check/mobile deposit: match by last 5 of trace number
+      if (!qbMatch) {
+        const traceM = String(btxn.desc || '').match(/^(\d{7,12})/);
+        if (traceM) {
+          const last5 = traceM[1].slice(-5);
+          qbMatch = qbTxns.find(q => {
+            const d = q.description.toUpperCase();
+            return d.includes('XXXXX' + last5) || new RegExp(`\\b${last5}\\b`).test(d);
+          });
+          if (qbMatch) matchMethod = 'trace-' + last5;
+        }
+      }
+
+      // Fallback for company payments with no extractable ID: amount + date proximity (±3 days)
+      if (!qbMatch && btxn.co) {
+        const bankDate = new Date(btxn.date);
+        qbMatch = qbTxns.find(q => {
+          if (Math.abs(q.amount - (parseFloat(btxn.amount) || 0)) > 0.02) return false;
+          return Math.abs(new Date(q.txnDate) - bankDate) / 86400000 <= 3;
+        });
+        if (qbMatch) matchMethod = 'amount+date';
+      }
+
+      let status;
+      if (!qbMatch) status = 'not-found';
+      else if (qbMatch.suggestedMatches.length === 0) status = 'add';
+      else if (qbMatch.suggestedMatches.length === 1) status = 'ready';
+      else status = 'ambiguous';
+
+      return {
+        bankTxn: btxn,
+        qbTxnId: qbMatch?.id || null,
+        qbDescription: qbMatch?.description || null,
+        qbAmount: qbMatch?.amount || null,
+        qbDate: qbMatch?.txnDate || null,
+        suggestedMatches: qbMatch?.suggestedMatches || [],
+        matchMethod,
+        status,
+      };
+    });
+
+    // For 'add' rows (QB has the deposit but no suggested match): search QB payments by amount+date
+    // This catches cases where the check number wasn't entered as a payment reference in Jobber
+    const addIndices = results.reduce((acc, r, i) => r.status === 'add' ? [...acc, i] : acc, []);
+    if (addIndices.length > 0) {
+      const addDates = addIndices.map(i => results[i].bankTxn.date).filter(Boolean);
+      const minD = new Date(addDates.reduce((a, b) => a < b ? a : b)); minD.setDate(minD.getDate() - 7);
+      const maxD = new Date(addDates.reduce((a, b) => a > b ? a : b)); maxD.setDate(maxD.getDate() + 7);
+      const pQuery = `SELECT * FROM Payment WHERE TxnDate >= '${minD.toISOString().slice(0,10)}' AND TxnDate <= '${maxD.toISOString().slice(0,10)}' MAXRESULTS 200`;
+      const pUrl = `${QB_API_BASE}/v3/company/${realmId}/query?query=${encodeURIComponent(pQuery)}&minorversion=65`;
+      const pResp = await fetch(pUrl, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } });
+      if (pResp.ok) {
+        const pData = await pResp.json();
+        const qbPayments = (pData.QueryResponse?.Payment || []).map(p => ({
+          txnId: p.Id, txnDate: p.TxnDate,
+          amount: parseFloat(p.TotalAmt) || 0,
+          entityName: p.CustomerRef?.name || '',
+        }));
+        for (const idx of addIndices) {
+          const r = results[idx];
+          const amt = parseFloat(r.bankTxn.amount) || 0;
+          const bankDate = new Date(r.bankTxn.date);
+          const matched = qbPayments.filter(p =>
+            Math.abs(p.amount - amt) < 0.02 &&
+            Math.abs(new Date(p.txnDate) - bankDate) / 86400000 <= 7
+          );
+          if (matched.length === 1) { r.status = 'ready'; r.suggestedMatches = matched.map(p => ({ ...p, txnType: 'Payment' })); }
+          else if (matched.length > 1) { r.status = 'ambiguous'; r.suggestedMatches = matched.map(p => ({ ...p, txnType: 'Payment' })); }
+        }
+      }
+    }
+
+    res.json({ results, qbTxnCount: qbTxns.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Step 3: Fetch invoices from Jobber ────────────────────────────────────────
 app.get('/api/invoices', async (req, res) => {
   try {
@@ -853,6 +969,13 @@ const collectorSources = (() => {
   }
 })();
 
+let collectAborted = false;
+
+app.post('/api/collect/stop', (_req, res) => {
+  collectAborted = true;
+  res.json({ ok: true });
+});
+
 app.post('/api/collect', async (req, res) => {
   if (!collectorSources) {
     return res.status(503).json({ error: 'Collector sources not available on this server.' });
@@ -862,12 +985,17 @@ app.post('/api/collect', async (req, res) => {
     ? companies.filter(c => collectorSources[c])
     : Object.keys(collectorSources);
 
+  collectAborted = false;
   console.log(`[collector] Running: ${targets.join(', ')} (daysBack=${daysBack})`);
 
   const allResults = [];
   const errors = {};
 
   for (const name of targets) {
+    if (collectAborted) {
+      console.log('[collector] Stopped by user');
+      break;
+    }
     console.log(`[collector] Starting ${name}...`);
     try {
       const results = await collectorSources[name].collect({ daysBack });

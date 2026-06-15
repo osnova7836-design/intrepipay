@@ -101,7 +101,26 @@
       "Read(//d//**)",
       "Bash(findstr \":3000\")",
       "Bash(tasklist *)",
-      "Bash(python -m json.tool)"
+      "Bash(python -m json.tool)",
+      "Bash(dir \"D:\\\\IntrepiX Group\\\\Clients\\\\TB Plumbing\\\\Osnova\\\\Kevin\" /b /a-d)",
+      "Bash(timeout 5)",
+      "Bash(Start-Sleep -Seconds 4)",
+      "Read(//mnt/d/**)",
+      "Bash(cmd.exe /c \"dir D:\\\\IntrepiX\")",
+      "Bash(dir \"D:\\\\IntrepiX Group\\\\Clients\\\\TB Plumbing\\\\Osnova\\\\Kevin\" /b /a:-d)",
+      "Bash(Select-Object Name, LastWriteTime)",
+      "PowerShell(Get-PSDrive C | Select-Object Used, Free | ForEach-Object { \"Used: {0:N1} GB  Free: {1:N1} GB\" -f \\($_.Used/1GB\\), \\($_.Free/1GB\\) })",
+      "PowerShell(Get-ChildItem C:\\\\Users\\\\drcal -Directory | ForEach-Object { $size = \\(Get-ChildItem $_.FullName -Recurse -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum\\).Sum; [PSCustomObject]@{Folder=$_.Name; GB=[math]::Round\\($size/1GB,2\\)} } | Sort-Object GB -Descending | Select-Object -First 10 | Format-Table -AutoSize)",
+      "PowerShell(Get-ChildItem C:\\\\ -Directory -ErrorAction SilentlyContinue | ForEach-Object { $size = \\(Get-ChildItem $_.FullName -Recurse -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum\\).Sum; [PSCustomObject]@{Folder=$_.Name; GB=[math]::Round\\($size/1GB,2\\)} } | Sort-Object GB -Descending | Select-Object -First 10 | Format-Table -AutoSize)",
+      "PowerShell(Get-ChildItem C:\\\\Windows -Directory -ErrorAction SilentlyContinue | ForEach-Object { $size = \\(Get-ChildItem $_.FullName -Recurse -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum\\).Sum; [PSCustomObject]@{Folder=$_.Name; GB=[math]::Round\\($size/1GB,2\\)} } | Sort-Object GB -Descending | Select-Object -First 8 | Format-Table -AutoSize)",
+      "PowerShell(Start-Process -FilePath \"cleanmgr.exe\" -ArgumentList \"/sagerun:1\" -Wait -ErrorAction SilentlyContinue)",
+      "PowerShell(Start-Process -FilePath \"dism.exe\" -ArgumentList \"/Online /Cleanup-Image /StartComponentCleanup /ResetBase\" -Wait -NoNewWindow 2>&1)",
+      "PowerShell(Get-PSDrive -PSProvider FileSystem | Select-Object Name, @{N='Used\\(GB\\)';E={[math]::Round\\($_.Used/1GB,2\\)}}, @{N='Free\\(GB\\)';E={[math]::Round\\($_.Free/1GB,2\\)}}, @{N='Total\\(GB\\)';E={[math]::Round\\(\\($_.Used+$_.Free\\)/1GB,2\\)}})",
+      "Skill(run)",
+      "PowerShell($sh = New-Object -ComObject WScript.Shell; $lnk = $sh.CreateShortcut\\(\"C:\\\\Users\\\\drcal\\\\Desktop\\\\TrackPoint.lnk\"\\); [PSCustomObject]@{ Target = $lnk.TargetPath; Arguments = $lnk.Arguments; WorkingDir = $lnk.WorkingDirectory; WindowStyle = $lnk.WindowStyle })",
+      "PowerShell($sh = New-Object -ComObject WScript.Shell; $lnk = $sh.CreateShortcut\\(\"C:\\\\Users\\\\drcal\\\\Desktop\\\\TrackPoint.lnk\"\\); Write-Host \"Target: $\\($lnk.TargetPath\\)\"; Write-Host \"Arguments: $\\($lnk.Arguments\\)\"; Write-Host \"WorkingDir: $\\($lnk.WorkingDirectory\\)\")",
+      "PowerShell($shell = New-Object -ComObject WScript.Shell; $shortcut = $shell.CreateShortcut\\(\"C:\\\\Users\\\\drcal\\\\Desktop\\\\TrackPoint.lnk\"\\); [PSCustomObject]@{ Target = $shortcut.TargetPath; Args = $shortcut.Arguments; WorkDir = $shortcut.WorkingDirectory; WindowStyle = $shortcut.WindowStyle })",
+      "PowerShell($shell = New-Object -ComObject WScript.Shell; $shortcut = $shell.CreateShortcut\\(\"C:\\\\Users\\\\drcal\\\\Desktop\\\\TrackPoint.lnk\"\\); Write-Host \"Target: $\\($shortcut.TargetPath\\)\"; Write-Host \"Args: $\\($shortcut.Arguments\\)\"; Write-Host \"WorkDir: $\\($shortcut.WorkingDirectory\\)\")"
     ]
   }
 }

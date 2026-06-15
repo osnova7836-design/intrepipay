@@ -114,6 +114,7 @@ async function scrapePaymentsList(page, cutoff) {
 async function getCheckDetails(page, check) {
   // Go back to payments list and click the matching Check Details button
   await page.goto(`${RELY_URL}/payments/`, { waitUntil: 'networkidle' });
+  await dismissChatbot(page);
 
   // Find the row with this ref# and click its Check Details link
   const row = page.locator('tr', { hasText: check.paymentRef });
@@ -130,7 +131,8 @@ async function getCheckDetails(page, check) {
 
   await dismissChatbot(page);
 
-  await page.locator('tr', { hasText: check.paymentRef }).locator('text=Check Details').click();
+  // force:true bypasses Playwright's coverage check — chatbot can re-appear during scroll/click
+  await page.locator('tr', { hasText: check.paymentRef }).locator('text=Check Details').click({ force: true });
   await page.waitForLoadState('networkidle');
 
   if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
