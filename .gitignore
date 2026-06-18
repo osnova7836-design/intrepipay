@@ -5,7 +5,6 @@ node_modules/
 tokens.json
 trackpoint.env
 *.orig
-*.png
 intercept-log.json
 logs/
 .collector-profile*/
