@@ -97,7 +97,7 @@ function parsePdfText(text, paymentRef) {
       const amount = parseFloat(amtMatch[1].replace(/[$,]/g, '')) || 0;
       // Credit rows are negative; payment rows are positive
       const finalAmount = isCredit ? -Math.abs(amount) : Math.abs(amount);
-      workOrders.push({ workOrder: billMatch[1], amount: finalAmount });
+      workOrders.push({ workOrder: 'B' + billMatch[1], amount: finalAmount });
       totalAmount += finalAmount;
     }
   }

@@ -961,6 +961,7 @@ const collectorSources = (() => {
       rheem:            require('./collector/sources/rheem'),
       'first-american': require('./collector/sources/first-american'),
       lessen:           require('./collector/sources/lessen'),
+      frontdoor:        require('./collector/sources/frontdoor'),
     };
   } catch (e) {
     console.error('Collector sources failed to load:', e.message);

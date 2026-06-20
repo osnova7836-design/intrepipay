@@ -1387,6 +1387,7 @@ const COLLECTOR_SOURCES = [
   { key: 'rheem',          label: 'Rheem' },
   { key: 'first-american', label: 'First American' },
   { key: 'lessen',         label: 'Lessen' },
+  { key: 'frontdoor',      label: 'Frontdoor' },
 ];
 
 function initSourcePicker() {
@@ -1737,6 +1738,13 @@ function lookupJobber(ref, company, secondaryRef) {
     }
   }
 
+  // Lessen: WO# from collector PDF is digits-only (from "Bill NNNNN") — Jobber subject has B prefix
+  if (coLower.includes('lessen')) {
+    if (jobberMap['B' + ref]) return bestMatch(jobberMap['B' + ref]);
+    const matchKey = Object.keys(jobberMap).find(k => !k.startsWith('inv:') && k.includes(ref));
+    if (matchKey) return bestMatch(jobberMap[matchKey]);
+  }
+
   // Lula: WO# (e.g. D06545F) may appear as substring of Jobber Subject
   if (coLower.includes('lula')) {
     const matchKey = Object.keys(jobberMap).find(k => !k.startsWith('inv:') && k.includes(ref));
@@ -1808,7 +1816,7 @@ function findBankMatch(payment, computedTotal=0) {
 // ── Main matching function ────────────────────────────────────────────────────
 function matchPayment(payment) {
   const items = payment.workOrders
-    ? payment.workOrders.map(wo => ({ref: wo.workOrder, amount: wo.amount, isDeduction: wo.amount < 0}))
+    ? payment.workOrders.filter(wo => wo.amount !== 0).map(wo => ({ref: wo.workOrder, amount: wo.amount, isDeduction: wo.amount < 0}))
     : parseRemittance(payment.remit, payment.co);
   const computedTotal = items.reduce((s,i)=>s+Math.abs(i.amount),0);
   const matchedTxn = findBankMatch(payment, computedTotal);

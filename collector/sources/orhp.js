@@ -96,7 +96,7 @@ function groupByCheck(rows) {
       };
     }
     map[checkNum].amount += amount;
-    map[checkNum].workOrders.push({ workOrder, amount });
+    if (amount > 0) map[checkNum].workOrders.push({ workOrder, amount });
   }
   return Object.values(map);
 }
