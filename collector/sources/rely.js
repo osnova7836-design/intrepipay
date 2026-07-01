@@ -5,21 +5,23 @@ const { solveRecaptcha } = require('../utils/captcha');
 
 const RELY_URL = 'https://relyhome.com';
 
-async function collect({ daysBack = 30 } = {}) {
+async function collect({ daysBack = 30, startDate, endDate } = {}) {
   const username = process.env.RELY_USERNAME;
   const password = process.env.RELY_PASSWORD;
   if (!username || !password) throw new Error('RELY_USERNAME / RELY_PASSWORD env vars not set');
 
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - daysBack);
+  // startDate, if given, takes priority over daysBack as the scrape cutoff
+  const cutoff = startDate ? new Date(startDate) : new Date();
+  if (!startDate) cutoff.setDate(cutoff.getDate() - daysBack);
 
   const ctx = await launchBrowser('rely');
   try {
     const page = await ctx.newPage();
     await login(page, username, password);
 
-    const checks = await scrapePaymentsList(page, cutoff);
-    console.log(`[Rely] Found ${checks.length} checks within last ${daysBack} days`);
+    let checks = await scrapePaymentsList(page, cutoff);
+    if (endDate) checks = checks.filter(c => c.paymentDate <= endDate);
+    console.log(`[Rely] Found ${checks.length} checks in range`);
 
     const results = [];
     for (const check of checks) {

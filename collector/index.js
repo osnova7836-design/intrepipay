@@ -9,7 +9,9 @@ const sources = {
   'two-ten':        require('./sources/two-ten'),
   rheem:            require('./sources/rheem'),
   'first-american': require('./sources/first-american'),
-  lessen:           require('./sources/lessen'),
+  lessen:           require('./sources/lessen-sms-assist'),
+  cinch:            require('./sources/cinch'),
+  homeserve:        require('./sources/homeserve'),
 };
 
 const app = express();

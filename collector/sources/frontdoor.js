@@ -179,8 +179,9 @@ async function collectPaymentDetails(page, dispatches, cutoff) {
       const payNumMatch  = text.match(/Payment\s+#\s*[\n\r\s]+(E-\d+)/i)
                         || text.match(/Payment\s+#\s*[\n\r\s]+(\d{6,})/i);
       const payDateMatch = text.match(/Payment\s+Details\s*[\n\r\s]+(\d{2}\/\d{2}\/\d{4})/i);
-      const paidMatch    = text.match(/Payment\s+Amount\s*[\n\r]+\s*\$?([\d,]+\.\d{2})/i)
-                        || text.match(/Paid\s+Total[:\s]*[\n\r]*\s*\$?([\d,]+\.\d{2})/i);
+      // Sum ALL "Payment Amount" occurrences — a dispatch can have multiple invoice submissions
+      const allPaidMatches = [...text.matchAll(/Payment\s+Amount\s*[\n\r]+\s*\$?([\d,]+\.\d{2})/gi)];
+      const paidMatch    = text.match(/Paid\s+Total[:\s]*[\n\r]*\s*\$?([\d,]+\.\d{2})/i);
 
       if (!payNumMatch) {
         console.warn(`[Frontdoor] No Payment # found for dispatch ${dispatchId}`);
@@ -202,7 +203,9 @@ async function collectPaymentDetails(page, dispatches, cutoff) {
       }
 
       const payDate   = payDateMatch ? new Date(payDateMatch[1]) : null;
-      const paidTotal = paidMatch ? parseFloat(paidMatch[1].replace(/,/g, '')) : 0;
+      const paidTotal = allPaidMatches.length > 0
+        ? allPaidMatches.reduce((sum, m) => sum + parseFloat(m[1].replace(/,/g, '')), 0)
+        : paidMatch ? parseFloat(paidMatch[1].replace(/,/g, '')) : 0;
 
       if (payDate && payDate < cutoff) {
         oldPayments.add(paymentRef);

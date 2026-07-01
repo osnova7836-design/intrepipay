@@ -278,7 +278,7 @@ else if (/\bEFTPY\d+\b/i.test(fullText) || /\bFALCON\b/i.test(fullText)) co = 'F
 **Format switched to Excel (SAP EFT) as of 2026-05-22.**
 
 - **Payment method:** EFT → use ACH type in Jobber
-- **Ref for Playwright:** `Payment Reference Number` value (e.g. `1568460`) — NOT the WCN numbers
+- **Ref for Playwright:** `Paper Document Number` value (e.g. `633348`) — NOT the WCN numbers, and NOT `Payment Reference Number` (that's an internal Rheem ID, not what shows on the bank statement)
 - **WCN numbers:** listed in `Document Reference Number` column; match against Jobber invoice Subject
 
 ### SAP EFT Excel Structure

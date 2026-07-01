@@ -51,7 +51,9 @@ async function parseEmail(gmail, msg) {
   const html = buf.toString('utf-8');
   const text = html.replace(/<[^>]+>/g, ' ').replace(/&amp;/g, '&').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ');
 
-  const refMatch = text.match(/Payment Reference Number\s+(\d+)/i);
+  // Paper Document Number is the check/reference number used on the bank statement —
+  // NOT the "Payment Reference Number" field, which is an internal Rheem ID.
+  const refMatch = text.match(/Paper Document Number\s+(\d+)/i);
   const dateMatch = text.match(/Payment Date\s+([A-Za-z]+ \d+,?\s*\d{4}|\d{1,2}\/\d{1,2}\/\d{4})/i);
   if (!refMatch) return null;
 
