@@ -9,3 +9,6 @@ intercept-log.json
 logs/
 .collector-profile*/
 .collector-downloads/
+qb-auth.json
+qb-tokens.json
+reconcile-data/
