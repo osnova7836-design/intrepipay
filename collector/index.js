@@ -12,6 +12,7 @@ const sources = {
   lessen:           require('./sources/lessen-sms-assist'),
   cinch:            require('./sources/cinch'),
   homeserve:        require('./sources/homeserve'),
+  frontdoor:        require('./sources/frontdoor'),
 };
 
 const app = express();

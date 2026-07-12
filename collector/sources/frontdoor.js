@@ -184,9 +184,9 @@ async function collectPaymentDetails(page, dispatches, cutoff) {
       const paidMatch    = text.match(/Paid\s+Total[:\s]*[\n\r]*\s*\$?([\d,]+\.\d{2})/i);
 
       if (!payNumMatch) {
-        console.warn(`[Frontdoor] No Payment # found for dispatch ${dispatchId}`);
-        consecutiveOld++;
-        if (consecutiveOld >= 3) { console.log('[Frontdoor] Early stop: too many unpayable dispatches'); break; }
+        // Not yet paid — normal and common, unrelated to date. Must NOT count toward
+        // the early-stop heuristic below or real payments further down the list get skipped.
+        console.warn(`[Frontdoor] No Payment # found for dispatch ${dispatchId} (not yet paid)`);
         continue;
       }
 
