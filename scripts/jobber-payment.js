@@ -87,66 +87,38 @@ async function ensureLoggedIn(ctx) {
 }
 
 async function selectPaymentMethod(page, type) {
-  // Jobber shows two sections: "Collect payment with Jobber Payments" (charges the client)
-  // and "Create a Payment Record" (records an already-received payment). Always use the latter.
-  const createRecord = page.getByText('Create a Payment Record', { exact: false });
-  if (await createRecord.count() > 0) {
-    await createRecord.first().click();
-    await page.waitForTimeout(400);
-    console.log('  Switched to "Create a Payment Record" mode');
-  }
-
-  // Wait for any select to have options
-  await page.waitForFunction(
-    () => Array.from(document.querySelectorAll('select')).some(s => s.options.length > 1),
-    { timeout: 15000 }
-  ).catch(() => {});
-
-  // Find the select that belongs to "Create a Payment Record":
-  // it will have record-type options (Check, Cash, Other) that the Jobber Payments select won't.
-  const allSelects = page.locator('select');
-  const selectCount = await allSelects.count();
-  let targetSelect = allSelects.last(); // fallback
-  let opts = [];
-
-  for (let i = 0; i < selectCount; i++) {
-    const s = allSelects.nth(i);
-    const sopts = await s.evaluate(el =>
-      Array.from(el.options).map(o => ({ value: o.value, label: o.text.trim() })).filter(o => o.label)
-    );
-    if (sopts.some(o => /check|cash|other/i.test(o.label))) {
-      targetSelect = s;
-      opts = sopts;
-      break;
-    }
-  }
-
-  if (!opts.length) {
-    opts = await targetSelect.evaluate(el =>
-      Array.from(el.options).map(o => ({ value: o.value, label: o.text.trim() })).filter(o => o.label)
-    );
-  }
-
-  console.log(`  Available payment options: ${opts.map(o => o.label).join(', ')}`);
-  if (!opts.length) throw new Error('Payment method select has no options — form may not have loaded');
-
+  // Jobber replaced the old native <select> with a combobox/listbox widget, and the
+  // listbox has two groups: "Collect a payment with Jobber Payments" (charges the client,
+  // real-time) and "Create a payment record" (logs an already-received payment). Some
+  // option labels (e.g. "Bank payment" — formerly "ACH") appear in BOTH groups, so we must
+  // scope the match to the "Create a payment record" group specifically.
   const tl = type.toLowerCase().replace(/[\s_-]/g, '');
-  const aliases = {
-    ach:        ['ach', 'bank transfer', 'bank payment', 'bank', 'eft', 'electronic'],
-    check:      ['check', 'cheque'],
-    cash:       ['cash'],
-    creditcard: ['credit card', 'credit', 'card'],
-    other:      ['other'],
+  const labels = {
+    ach:        'Bank payment', // Jobber renamed ACH -> "Bank payment" ~mid-2026
+    check:      'Check',
+    cash:       'Cash',
+    creditcard: 'Credit/debit card',
+    other:      'Other',
   };
-  const candidates = aliases[tl] || [tl];
+  const targetLabel = labels[tl];
+  if (!targetLabel) throw new Error(`No payment-method mapping for type "${type}"`);
 
-  let matchIdx = opts.findIndex(o => o.label.toLowerCase() === type.toLowerCase());
-  if (matchIdx < 0) matchIdx = opts.findIndex(o => candidates.some(a => o.label.toLowerCase().includes(a)));
+  const combo = page.getByRole('combobox', { name: /payment method/i });
+  await combo.click();
 
-  if (matchIdx < 0) throw new Error(`No option matches "${type}". Available: ${opts.map(o => o.label).join(', ')}`);
+  const listbox = page.getByRole('listbox');
+  await listbox.waitFor({ state: 'visible', timeout: 10000 });
 
-  await targetSelect.selectOption({ index: matchIdx });
-  console.log(`  Payment method: selected "${opts[matchIdx].label}"`);
+  const recordGroup = listbox.locator('[role="group"]', { hasText: 'Create a payment record' }).last();
+  const opts = await recordGroup.getByRole('option').allTextContents();
+  console.log(`  Available payment options: ${opts.join(', ')}`);
+
+  const option = recordGroup.getByRole('option', { name: targetLabel, exact: true });
+  if (await option.count() === 0) {
+    throw new Error(`No option matches "${targetLabel}" (type="${type}"). Available: ${opts.join(', ')}`);
+  }
+  await option.first().click();
+  console.log(`  Payment method: selected "${targetLabel}"`);
 }
 
 async function fillReference(page, type, ref) {

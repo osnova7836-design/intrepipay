@@ -614,6 +614,7 @@ const collectorSources = (() => {
       frontdoor:        require('./collector/sources/frontdoor'),
       cinch:            require('./collector/sources/cinch'),
       homeserve:        require('./collector/sources/homeserve'),
+      'all-county-first': require('./collector/sources/all-county-first'),
     };
   } catch (e) {
     console.error('Collector sources failed to load:', e.message);
