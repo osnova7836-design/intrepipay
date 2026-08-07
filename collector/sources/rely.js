@@ -175,12 +175,29 @@ async function findCheckOnList(page, refNum) {
   }
 }
 
+// Splits a CSV line on commas that are NOT inside a quoted field — a plain
+// line.split(',') breaks amounts like "$1,000.00" into two columns and
+// silently truncates the parsed amount (e.g. $1,000.00 -> $1).
+function splitCsvLine(line) {
+  const cols = [];
+  let cur = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') { inQuotes = !inQuotes; continue; }
+    if (ch === ',' && !inQuotes) { cols.push(cur.trim()); cur = ''; continue; }
+    cur += ch;
+  }
+  cols.push(cur.trim());
+  return cols;
+}
+
 function parseCsv(filePath, totalAmount) {
   const content = fs.readFileSync(filePath, 'utf-8');
   const lines = content.trim().split('\n').filter(Boolean);
   if (lines.length < 2) return [];
 
-  const header = lines[0].split(',').map(h => h.replace(/"/g, '').trim().toLowerCase());
+  const header = splitCsvLine(lines[0]).map(h => h.toLowerCase());
   const claimIdx = header.findIndex(h => h.includes('claim'));
   const amtIdx = header.findIndex(h => h.includes('amount'));
 
@@ -190,7 +207,7 @@ function parseCsv(filePath, totalAmount) {
   }
 
   return lines.slice(1).map(line => {
-    const cols = line.split(',').map(c => c.replace(/"/g, '').trim());
+    const cols = splitCsvLine(line);
     return {
       workOrder: cols[claimIdx] || '',
       amount: parseFloat((cols[amtIdx] || '0').replace(/[$,]/g, '')) || 0,
