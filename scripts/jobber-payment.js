@@ -253,7 +253,7 @@ async function ensureInvoicesChecked(page, invoiceIds) {
 
   console.log(`  Clicked ${clicked.length}/${invoiceIds.length} invoices`);
   if (remaining.size > 0 && remaining.size < invoiceIds.length) {
-    console.log(`  Skipped ${remaining.size} (not in outstanding list — likely already paid):`);
+    console.log(`  Skipped ${remaining.size} (not in outstanding list — already paid, voided, or written off; verify in Jobber):`);
     for (const id of remaining) console.log(`    - ${id}`);
   }
 
@@ -286,16 +286,100 @@ async function clickSubmit(page) {
 
 // Fills and optionally submits one Jobber payment form for a single batch of invoices.
 // The caller is responsible for opening and closing the page.
-async function fillAmount(page, amount) {
-  // Find the amount input in the "Create a Payment Record" section
-  const field = page.getByLabel(/^amount$/i).first();
-  await field.click({ clickCount: 3 });
+//
+// Jobber's payment form no longer has one page-wide "Amount" field — each outstanding
+// invoice row has its own "Enter Payment" input (defaulting to that invoice's full
+// balance), and the "Charge $X" total at the bottom is just their sum. An override must
+// be written into the specific row's field, not a global field (which no longer exists —
+// the old getByLabel(/^amount$/i) selector silently matched nothing).
+async function fillAmountForInvoice(page, invoiceId, amount) {
+  // Jobber's invoice-row markup is plain divs with hashed CSS-module classnames (no
+  // <table>/<tr>, and the classnames change on every Jobber deploy) — so the row can't
+  // be found via a stable tag or class selector. Walk up from the invoice link to the
+  // nearest ancestor holding exactly 2 inputs (its checkbox + its "Enter Payment" field,
+  // confirmed empirically — the field is the last of the two); this is the same
+  // walk-up-from-the-link technique ensureInvoicesChecked already uses to find the
+  // checkbox itself. Stamp that ancestor with a temp marker so Playwright can grab a
+  // real locator for it and type into the field with actual keyboard events (needed for
+  // React-controlled inputs — programmatic .value assignment doesn't register).
+  const marker = `data-tp-amount-row-${invoiceId}`;
+
+  // The row was checked earlier by scrolling through the (likely virtualized) list, then
+  // we scrolled back to the top to fill the fields above — the row may no longer be in
+  // the DOM. Scroll back down the same way ensureInvoicesChecked found it originally.
+  for (let i = 0; i < 60; i++) {
+    const found = await page.evaluate(({ id, marker }) => {
+      const link = document.querySelector(`a[href*="/invoices/${id}"]`);
+      if (!link) return false;
+      let el = link.parentElement;
+      for (let k = 0; k < 12 && el; k++) {
+        if (el.querySelectorAll('input').length === 2) {
+          el.setAttribute(marker, '1');
+          return true;
+        }
+        el = el.parentElement;
+      }
+      return false;
+    }, { id: invoiceId, marker });
+    if (found) break;
+    await page.evaluate(() => window.scrollBy(0, 800));
+    await page.waitForTimeout(200);
+  }
+
+  const row = page.locator(`[${marker}]`);
+  await row.waitFor({ state: 'attached', timeout: 10000 });
+  const input = row.locator('input').last();
+  // scrollIntoViewIfNeeded() uses "nearest edge" alignment, which can leave the row
+  // hugging the top of the viewport — right under the sticky list header (see
+  // ATL-DataList-stickyHeader above) — so the click gets intercepted by the header
+  // instead of landing on the field. Centering it clears both that header and any
+  // sticky footer/total bar at the bottom.
+  await input.evaluate(el => el.scrollIntoView({ block: 'center' }));
+  await page.waitForTimeout(150);
+
+  try {
+    await input.click({ clickCount: 3, timeout: 8000 });
+  } catch (err) {
+    // Centering (see comment above) didn't fully fix the sticky-header interception —
+    // this has now recurred on a different invoice/payment, so something else is also
+    // covering the field. Identify the actual blocking element before falling back, so
+    // a repeat failure gives real data instead of another guess, then force the click.
+    // Safe to force: the value-verification check right below still catches a click
+    // that lands on the wrong element (the typed amount won't match afterward).
+    const box = await input.boundingBox();
+    let blocker = 'unknown (no bounding box)';
+    if (box) {
+      blocker = await page.evaluate(({ x, y }) => {
+        const el = document.elementFromPoint(x, y);
+        if (!el) return 'nothing at point';
+        const rect = el.getBoundingClientRect();
+        return `${el.tagName}.${el.className || ''}#${el.id || ''} style-position=${getComputedStyle(el).position} rect=${JSON.stringify(rect)} text="${(el.textContent || '').slice(0, 80)}"`;
+      }, { x: box.x + box.width / 2, y: box.y + box.height / 2 });
+    }
+    console.log(`  Click intercepted on invoice ${invoiceId} amount field — blocked by: ${blocker}. Retrying with force click.`);
+    await input.click({ clickCount: 3, force: true, timeout: 5000 });
+  }
   await page.keyboard.type(String(amount), { delay: 50 });
   await page.keyboard.press('Tab');
   await page.waitForTimeout(300);
+
+  // Belt-and-suspenders: confirm the field actually holds what we just typed before
+  // moving on. If the click landed on the wrong element, got intercepted partway
+  // through typing, or a React re-render reset the field, Jobber would otherwise
+  // silently submit whatever value is left (its own default full-balance, in the
+  // worst case) instead of the override — fail loudly here rather than let that reach
+  // a live payment. (Invoice #146898075/#18043 incidents — see TrackPoint.md.)
+  const actual = await input.inputValue();
+  const expected = Number(amount).toFixed(2);
+  const actualNum = parseFloat(actual.replace(/[^0-9.-]/g, ''));
+  if (Number.isNaN(actualNum) || Math.abs(actualNum - Number(amount)) > 0.005) {
+    throw new Error(
+      `Amount override verification failed for invoice ${invoiceId}: expected ${expected}, field shows "${actual}". Aborting before submit.`
+    );
+  }
 }
 
-async function applyJobberPaymentBatch(page, { clientId, invoiceIds, type, ref, date, amount, submit, navigateOnly }) {
+async function applyJobberPaymentBatch(page, { clientId, invoiceIds, type, ref, date, amounts, submit, navigateOnly }) {
   const url = buildPaymentUrl({ clientId, invoiceIds });
   console.log(`Navigating to ${url}`);
   await page.goto(url, { waitUntil: 'load' });
@@ -335,9 +419,14 @@ async function applyJobberPaymentBatch(page, { clientId, invoiceIds, type, ref, 
   console.log(`Filling transaction date "${date}"`);
   await fillTransactionDate(page, date);
 
-  if (amount !== undefined && amount !== null) {
-    console.log(`Overriding payment amount to ${amount}`);
-    await fillAmount(page, amount);
+  // Each invoice row has its own "Enter Payment" field (see fillAmountForInvoice), so
+  // overrides are a per-invoice map — invoices with no entry just keep Jobber's default
+  // (their full outstanding balance), which is correct for a normal full-pay invoice.
+  const batchIds = invoiceIds.map(String);
+  const overridesInThisBatch = Object.entries(amounts || {}).filter(([id]) => batchIds.includes(String(id)));
+  for (const [invoiceId, amt] of overridesInThisBatch) {
+    console.log(`Overriding payment amount to ${amt} for invoice ${invoiceId}`);
+    await fillAmountForInvoice(page, invoiceId, amt);
   }
 
   if (submit) {
@@ -358,7 +447,7 @@ async function applyJobberPayment({
   type,
   ref,
   date,
-  amount = null,
+  amounts = null,  // optional { [invoiceId]: overrideAmount } — omitted invoices use their full balance
   submit = false,
   headless = false,
   navigateOnly = false,
@@ -395,7 +484,7 @@ async function applyJobberPayment({
         const page = await ctx.newPage();
         let leaveOpen = false;
         try {
-          await applyJobberPaymentBatch(page, { clientId, invoiceIds: batch, type, ref, date, amount, submit, navigateOnly });
+          await applyJobberPaymentBatch(page, { clientId, invoiceIds: batch, type, ref, date, amounts, submit, navigateOnly });
           if (submit && isLast) {
             leaveOpen = true;
             console.log('Jobber confirmation page left open in Chrome.');
@@ -425,7 +514,7 @@ async function applyJobberPayment({
       }
       const page = await ctx.newPage();
       try {
-        await applyJobberPaymentBatch(page, { clientId, invoiceIds: batch, type, ref, date, amount, submit, navigateOnly });
+        await applyJobberPaymentBatch(page, { clientId, invoiceIds: batch, type, ref, date, amounts, submit, navigateOnly });
       } finally {
         await page.close();
       }

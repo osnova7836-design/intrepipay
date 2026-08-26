@@ -22,6 +22,11 @@ TrackPoint is a Node.js/Express web app for payment reconciliation aimed at home
 4. Check every invoice checkbox
 5. Submit the payment
 
+**Known-issue log (per-invoice amount overrides, `scripts/jobber-payment.js` `fillAmountForInvoice`):**
+- 2026-08-24, invoice #18043: a partial-amount override ($275.00) landed in Jobber as $25.00 — a dropped digit during the payment run, cause never fully confirmed. Cost a $250 shortfall, corrected manually.
+- 2026-08-24, invoice #146898075 (batch ref 2734435): the override click hung retrying against `[data-testid="ATL-DataList-stickyHeader"]` — `scrollIntoViewIfNeeded()`'s default "nearest edge" alignment left the row's input under the sticky header, so Playwright's click kept getting intercepted. User saved manually before it resolved; the amount happened to be correct by coincidence (Jobber's default full-balance value for that invoice equaled the override anyway) — verified after the fact by comparing `amounts.total` vs `amounts.paymentsTotal` across the whole batch via the GraphQL API.
+- Fix applied: scroll-center the row (`el.scrollIntoView({block:'center'})`) instead of `scrollIntoViewIfNeeded()`, and verify the field's `inputValue()` matches the intended override after typing — throws before submit if it doesn't. Not yet proven against a live repro of the stuck-scroll case; treat future amount-override runs as still worth spot-checking against the confirmation receipt.
+
 ---
 
 ## Environment & Disk Layout
@@ -370,6 +375,16 @@ WCNs appear after `-WCN -` separated by ` / `. `lookupJobber` splits any comma-j
 1. **Shortpay amount verification:** Next Rheem shortpay — confirm Jobber records the remittance amount (not invoice total) after Playwright applies it with the explicit `amount` override.
 
 2. **Collector not on Render:** Playwright-based collection only works locally. Dedicated Render instance ($25/mo) needed if other clients ever use TrackPoint.
+
+---
+
+## QB Read-Only Browser Agent (added 2026-07-01)
+
+`scripts/qb-agent.js` — a long-lived Playwright session against QB Online (persistent Chrome profile `D:\chrome-qb-profile`, same stealth setup as the Jobber automation), driven by dropping JSON command files instead of one-shot CLI args. Built after the QB OAuth/Playwright *payment-matching* integration was removed (commit e7aef37) — this is read-only reporting/export only, not a revival of that.
+
+Run `node scripts/qb-agent.js` in the background; it polls `.qb-agent/qb-cmd.json` (gitignored) every ~1.2s, executes, writes `.qb-agent/qb-result.json`. Actions: `status`, `goto`, `screenshot`, `eval` (arbitrary page.evaluate), `click`, `type` (real keyboard input — needed for React-controlled report date fields), `press`, `text`, `newpage`/`waitfordownload` (captures a download triggered by clicking a selector, e.g. QB's "Export as CSV"). `stop` shuts it down cleanly. 40-minute max lifetime.
+
+Used for the TB Plumbing AR investigation: pulled QB's "Open Invoices" report and cross-referenced invoice numbers against the full live Jobber invoice list (`/api/invoices`, page cap raised 50→500 to avoid truncating at 5,000) to find invoices synced from Jobber that were later deleted there — QB's one-way sync never removes them, so they sit as permanently-open AR. Found $161,537.53 (41% of QB's $393,264.44 open AR) orphaned this way; some had QB's auto-appended `-1`/`-` suffix confirming Jobber recreated the invoice under the same number after deletion.
 
 ---
 

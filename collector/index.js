@@ -2,19 +2,7 @@ require('dotenv').config({ path: require('path').join(__dirname, '../.env') });
 
 const express = require('express');
 
-const sources = {
-  rely:             require('./sources/rely'),
-  lula:             require('./sources/lula'),
-  orhp:             require('./sources/orhp'),
-  'two-ten':        require('./sources/two-ten'),
-  rheem:            require('./sources/rheem'),
-  'first-american': require('./sources/first-american'),
-  lessen:           require('./sources/lessen-sms-assist'),
-  cinch:            require('./sources/cinch'),
-  homeserve:        require('./sources/homeserve'),
-  frontdoor:        require('./sources/frontdoor'),
-  'all-county-first': require('./sources/all-county-first'),
-};
+const sources = require('./sources');
 
 const app = express();
 app.use(express.json());

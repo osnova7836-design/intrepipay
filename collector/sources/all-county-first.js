@@ -78,7 +78,15 @@ function parseRows(rows, cutoff) {
       if (current && current.workOrders.length) payments.push(current);
       const date = normalizeDate(row.date);
       skipGroup = voidedRefs.has(row.reference);
-      current = { company: 'All County First', paymentRef: row.reference === 'ePay' ? `AC-${date}-${row.amount}` : row.reference, paymentDate: date, amount: 0, workOrders: [] };
+      // "ePay" isn't a real check/ACH reference — the portal just prints that literal
+      // string when the vendor payment has no reference of its own (see Bill rows below,
+      // which DO carry the real Jobber invoice number, unaffected by this). Leaving
+      // paymentRef blank here (instead of fabricating a fake one) lets matchPayment()'s
+      // bank-matching step in public/index.html fill in the real ACH/check reference
+      // from the matched bank transaction description, or prompt for it manually when
+      // applying the payment — rather than silently writing a made-up string into
+      // Jobber's payment record as the reference number.
+      current = { company: 'All County First', paymentRef: row.reference === 'ePay' ? '' : row.reference, paymentDate: date, amount: 0, workOrders: [] };
       continue;
     }
 

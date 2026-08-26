@@ -432,6 +432,7 @@ async function fetchJobberInvoices() {
       'jobberDbId': inv.jobberWebUri ? inv.jobberWebUri.split('/').pop() : '',
       'jobberGqlId': inv.id || '',
       'clientDbId': extractNumericId(inv.client?.id),
+      'createdAt': inv.createdAt || '',
     }));
 
     jobberMap = {};
@@ -1378,6 +1379,7 @@ const COLLECTOR_SOURCES = [
   { key: 'cinch',          label: 'Cinch' },
   { key: 'homeserve',      label: 'HomeServe' },
   { key: 'all-county-first', label: 'All County First Choice' },
+  { key: 'assurant',       label: 'Assurant' },
 ];
 
 function initSourcePicker() {
@@ -1741,6 +1743,13 @@ function lookupJobber(ref, company, secondaryRef) {
     if (matchKey) return bestMatch(jobberMap[matchKey]);
   }
 
+  // Assurant: Claim Number from the remittance is a PREFIX of Jobber's Subject
+  // (e.g. claim "26000432417" -> Subject "26000432417-HWBP-1"), never an exact match
+  if (coLower.includes('assurant') || coLower.includes('federal warranty')) {
+    const matchKey = Object.keys(jobberMap).find(k => !k.startsWith('inv:') && k.startsWith(ref));
+    if (matchKey) return bestMatch(jobberMap[matchKey]);
+  }
+
   // Case-insensitive fallback
   const refLower = ref.toLowerCase();
   for (const key of Object.keys(jobberMap)) {
@@ -2044,8 +2053,16 @@ function renderReport(results) {
         const statusBadge = i.jobber_status
           ? '<span class="badge '+(i.jobber_status==='Draft'?'b-draft':i.jobber_status==='Paid'?'b-match':i.jobber_status==='Past Due'?'b-shortpay':'b-pastdue')+'">'+i.jobber_status+'</span>'
           : '<span style="color:var(--text-muted)">—</span>';
-        const applyAmt = (i.status==='overpay'?i.jobber_amount:Math.abs(i.remittance_amount)).toFixed(2);
-        const applyControls = i.jobber_invoice && (i.status==='match'||i.status==='overpay'||i.status==='shortpay')
+        // A deduction line only sometimes has a real jobber_invoice/jobber_amount — when
+        // lookupJobber found a match despite the negative remittance amount (e.g. a claim
+        // clawback that happens to share a WO# with a separate, still-open invoice). The
+        // common case (a plain adjustment with no invoice at all) has jobber_amount===null,
+        // so it must fall back to the remittance amount rather than call .toFixed on null.
+        const applyBase = i.status==='overpay' ? i.jobber_amount
+          : i.status==='deduction' ? (i.jobber_amount ?? Math.abs(i.remittance_amount))
+          : Math.abs(i.remittance_amount);
+        const applyAmt = applyBase.toFixed(2);
+        const applyControls = i.jobber_invoice && i.jobber_amount && (i.status==='match'||i.status==='overpay'||i.status==='shortpay'||i.status==='deduction')
           ? '<input type="number" step="0.01" id="amo-'+i.jobber_invoice+'" value="'+applyAmt+'" data-default="'+applyAmt+'" oninput="this.style.borderColor=parseFloat(this.value).toFixed(2)!==this.dataset.default?\'var(--amber)\':\'var(--border)\'" style="width:72px;background:var(--surface);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:\'IBM Plex Mono\',monospace;font-size:11px;padding:3px 5px;text-align:right">'
             + '<button class="btn-apply btn-apply-one" onclick="applyOne(\''+i.jobber_invoice+'\',null,\''+(r.ref||'').replace(/'/g,'')+'\',this)" '+(isBlocked(r)?'disabled':'')+'>Apply</button>'
           : '';
@@ -2414,13 +2431,26 @@ function renderApplyBar(r) {
       }).join('')}
     </div>`;
 
+  const drafts = r.line_items.filter(i => i.status === 'draft');
+  const draftSection = drafts.length === 0 ? '' : `
+    <div class="deduction-bar" id="draftbar-${blockKey}">
+      <div class="deduction-bar-title">⚠ ${drafts.length} draft invoice${drafts.length!==1?'s':''} — send before applying</div>
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--text-muted);margin:0 0 .6rem">
+        Sets each invoice's issued date to its own Jobber entry date (always before this payment) and due upon receipt, then marks it sent.
+      </div>
+      <button class="btn-add-deduction" id="draftbtn-${blockKey}" onclick="fixDraftInvoices('${blockKey}', this)">
+        &#9993; Send ${drafts.length} draft invoice${drafts.length!==1?'s':''}
+      </button>
+      <span id="draftstatus-${blockKey}" style="margin-left:8px;font-family:'IBM Plex Mono',monospace;font-size:11px"></span>
+    </div>`;
+
   const hasDeductions = deductions.length > 0;
   const applyDisabled = hasDeductions ? 'disabled style="opacity:0.45;cursor:not-allowed"' : '';
   const applyLabel = hasDeductions
     ? `⛔ Add deductions first`
     : `▶ Apply all ${matchedItems.length} payment${matchedItems.length!==1?'s':''}`;
 
-  return `${deductionSection}<div class="apply-bar">
+  return `${deductionSection}${draftSection}<div class="apply-bar">
     <div class="apply-date">
       <span>Date</span>
       <input type="date" id="date-${blockKey}" value="${r.date || todayISO()}">
@@ -2732,6 +2762,82 @@ function confirmPaymentDate(paymentDate, count, onConfirm, skipNote = '', initia
   };
 }
 
+async function fixDraftInvoices(blockKey, btn) {
+  const result = (window._lastResults || []).find(r => (r.ref || r.co || '').replace(/[^a-zA-Z0-9]/g, '_') === blockKey);
+  if (!result) return;
+  const drafts = result.line_items.filter(i => i.status === 'draft');
+  if (drafts.length === 0) return;
+
+  const statusEl = document.getElementById(`draftstatus-${blockKey}`);
+  btn.disabled = true;
+  btn.textContent = `Sending ${drafts.length}...`;
+  if (statusEl) statusEl.textContent = '';
+
+  const invoices = [];
+  const missing = [];
+  for (const item of drafts) {
+    const row = jobberRows.find(r => String(r['Invoice #']).trim() === String(item.jobber_invoice).trim());
+    if (!row?.jobberGqlId || !row?.createdAt) { missing.push(item.jobber_invoice); continue; }
+    invoices.push({ jobberGqlId: row.jobberGqlId, invoiceNumber: item.jobber_invoice, issuedDate: row.createdAt.slice(0, 10) });
+  }
+  if (missing.length) {
+    btn.disabled = false;
+    btn.textContent = `✉ Send ${drafts.length} draft invoice${drafts.length!==1?'s':''}`;
+    if (statusEl) { statusEl.style.color = '#f87171'; statusEl.textContent = `Missing Jobber data for #${missing.join(', #')} — reconnect Jobber and retry.`; }
+    return;
+  }
+
+  let data;
+  try {
+    const resp = await fetch('/api/fix-draft-invoices', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ invoices })
+    });
+    data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = `✉ Send ${drafts.length} draft invoice${drafts.length!==1?'s':''}`;
+    if (statusEl) { statusEl.style.color = '#f87171'; statusEl.textContent = 'Failed: ' + e.message; }
+    return;
+  }
+
+  const resList = data.results || [];
+  const succeeded = resList.filter(r => r.ok);
+  const failed = resList.filter(r => !r.ok);
+
+  // Patch state for succeeded invoices: flip jobberRows Status and reclassify the
+  // matching line item using the diff matchPayment() already computed — Draft status
+  // short-circuits that classification (see matchPayment), so it has to be applied
+  // now that the invoice is no longer a draft.
+  for (const s of succeeded) {
+    const row = jobberRows.find(r => String(r['Invoice #']).trim() === String(s.invoiceNumber).trim());
+    if (row) row['Status'] = 'Awaiting Payment';
+    for (const r of (window._lastResults || [])) {
+      for (const item of r.line_items) {
+        if (item.status === 'draft' && String(item.jobber_invoice).trim() === String(s.invoiceNumber).trim()) {
+          item.jobber_status = 'Awaiting Payment';
+          const diff = item.difference || 0;
+          if (diff > 0.01) { item.status = 'shortpay'; item.note = 'Short pay: paid '+fmt(Math.abs(item.remittance_amount))+' vs invoiced '+fmt(item.jobber_amount); }
+          else if (diff < -0.01) { item.status = 'overpay'; item.note = 'Over pay: paid '+fmt(Math.abs(item.remittance_amount))+' vs invoiced '+fmt(item.jobber_amount); }
+          else { item.status = 'match'; item.note = 'Mark paid in Jobber'; }
+        }
+      }
+    }
+  }
+
+  if (succeeded.length) renderReport(window._lastResults);
+
+  if (failed.length) {
+    alert(`${succeeded.length} invoice${succeeded.length!==1?'s':''} sent OK. ${failed.length} failed:\n`
+      + failed.map(f => `#${f.invoiceNumber}: ${f.error}`).join('\n'));
+    if (!succeeded.length) {
+      btn.disabled = false;
+      btn.textContent = `✉ Send ${drafts.length} draft invoice${drafts.length!==1?'s':''}`;
+    }
+  }
+}
+
 async function applyOne(invoiceNumber, _unused, ref, btn) {
   const block = btn.closest('.pblock');
   const dateInput = block.querySelector('input[type=date]');
@@ -2804,12 +2910,19 @@ async function applyAll(ref, co, btn) {
   const hasShortpay = matchedItems.some(i => i.status === 'shortpay');
 
   if (hasShortpay) {
-    // Shortpay: use Playwright path with total remittance amount instead of invoice totals
+    // Each invoice row in Jobber's payment form has its own "Enter Payment" field, so a
+    // short/over-paid invoice needs its own override amount rather than one combined
+    // total for the whole batch — invoices left out of this map get Jobber's default
+    // (their full balance), which is correct for a normal fully-matched invoice.
     confirmPaymentDate(paymentDate, invoiceDbIds.length, (date, confirmedRef) => {
-      const totalAmount = matchedItems.reduce((sum, i) =>
-        sum + (i.status === 'overpay' ? i.jobber_amount : Math.abs(i.remittance_amount)), 0
-      );
-      const params = new URLSearchParams({ clientId: clientDbId, invoiceIds: invoiceDbIds.join(','), type: payType, ref: confirmedRef, date, amount: totalAmount.toFixed(2) });
+      const amounts = {};
+      for (const item of matchedItems) {
+        if (item.status !== 'shortpay' && item.status !== 'overpay') continue;
+        const row = jobberRows.find(r => String(r['Invoice #']).trim() === String(item.jobber_invoice).trim());
+        if (!row?.jobberDbId) continue;
+        amounts[row.jobberDbId] = (item.status === 'overpay' ? item.jobber_amount : Math.abs(item.remittance_amount)).toFixed(2);
+      }
+      const params = new URLSearchParams({ clientId: clientDbId, invoiceIds: invoiceDbIds.join(','), type: payType, ref: confirmedRef, date, amounts: JSON.stringify(amounts) });
       streamPayment(params, btn, invoiceNumbers);
     }, skipNote, ref);
   } else {

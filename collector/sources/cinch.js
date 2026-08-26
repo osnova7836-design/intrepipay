@@ -14,6 +14,7 @@ async function getPage(username, password) {
       const url = _page.url();
       if (url.startsWith('https://secure.paymode.com/')) return _page;
     } catch {}
+    await _ctx.close().catch(() => {});
     _ctx = null;
     _page = null;
   }

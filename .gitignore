@@ -12,3 +12,5 @@ logs/
 qb-auth.json
 qb-tokens.json
 reconcile-data/
+.qb-agent/
+.jobber-agent/

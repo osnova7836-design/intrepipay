@@ -151,12 +151,13 @@ app.get('/api/invoices', async (req, res) => {
   try {
     const token = await getValidToken();
 
+    const MAX_INVOICES = 5000;
     let allInvoices = [];
     let hasNextPage = true;
     let cursor = null;
     let pageCount = 0;
 
-    while (hasNextPage && pageCount < 50) {
+    while (hasNextPage && allInvoices.length < MAX_INVOICES) {
       const afterClause = cursor ? `(first: 250, after: "${cursor}")` : `(first: 250)`;
       const query = `{
         invoices${afterClause} {
@@ -166,6 +167,7 @@ app.get('/api/invoices', async (req, res) => {
             subject
             total
             invoiceStatus
+            createdAt
             client {
               id
               name
@@ -331,6 +333,86 @@ app.post('/api/add-line-item', async (req, res) => {
   }
 });
 
+// ── Fix draft invoices: set issued date + due-upon-receipt, then mark sent ────
+// Jobber's payment automation (jobber-payment.js) only works against outstanding
+// (Awaiting Payment / Past Due) invoices — a Draft has no issued date yet and won't
+// show up in the "Create a Payment Record" outstanding-invoice list at all. This
+// mechanically resolves that: set issuedDate (caller supplies it — public/index.html
+// uses each invoice's own createdAt date, which is always earlier than the payment
+// being applied and reflects when the invoice was actually entered) and due-upon-
+// receipt (dueDetails.invoiceNet: 0), then call invoiceMarkAsSent. No AI/judgement
+// involved, unlike deduction line items — every draft invoice found by matchPayment()
+// already has a confirmed amount match, so this is safe to run unattended.
+app.post('/api/fix-draft-invoices', async (req, res) => {
+  const { invoices } = req.body;
+  if (!Array.isArray(invoices) || invoices.length === 0) {
+    return res.status(400).json({ error: 'invoices array required' });
+  }
+
+  let token;
+  try {
+    token = await getValidToken();
+  } catch (err) {
+    return res.status(401).json({ error: err.message });
+  }
+
+  async function gql(query) {
+    const resp = await fetch(GRAPHQL_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+        'X-JOBBER-GRAPHQL-VERSION': '2025-04-16'
+      },
+      body: JSON.stringify({ query })
+    });
+    return resp.json();
+  }
+
+  const results = [];
+  for (const { jobberGqlId, invoiceNumber, issuedDate } of invoices) {
+    if (!jobberGqlId || !issuedDate) {
+      results.push({ invoiceNumber, ok: false, error: 'missing jobberGqlId or issuedDate' });
+      continue;
+    }
+    try {
+      const editResp = await gql(`mutation {
+        invoiceEdit(invoiceId: "${jobberGqlId}", input: { issuedDate: "${issuedDate}", dueDetails: { invoiceNet: 0 } }) {
+          invoice { id issuedDate }
+          userErrors { message path }
+        }
+      }`);
+      const editErrors = editResp.errors?.map(e => e.message) || editResp.data?.invoiceEdit?.userErrors?.map(e => e.message) || [];
+      if (editErrors.length) {
+        results.push({ invoiceNumber, ok: false, error: editErrors.join('; ') });
+        continue;
+      }
+
+      await new Promise(r => setTimeout(r, 250));
+
+      const sentResp = await gql(`mutation {
+        invoiceMarkAsSent(id: "${jobberGqlId}") {
+          invoice { id invoiceStatus }
+          userErrors { message path }
+        }
+      }`);
+      const sentErrors = sentResp.errors?.map(e => e.message) || sentResp.data?.invoiceMarkAsSent?.userErrors?.map(e => e.message) || [];
+      if (sentErrors.length) {
+        results.push({ invoiceNumber, ok: false, error: sentErrors.join('; ') });
+        continue;
+      }
+
+      console.log(`Draft fixed: Invoice #${invoiceNumber} · issuedDate=${issuedDate} · due upon receipt · marked sent`);
+      results.push({ invoiceNumber, ok: true, status: sentResp.data.invoiceMarkAsSent.invoice.invoiceStatus });
+    } catch (err) {
+      results.push({ invoiceNumber, ok: false, error: err.message });
+    }
+    await new Promise(r => setTimeout(r, 250));
+  }
+
+  res.json({ results });
+});
+
 // ── Apply payment to invoice in Jobber ────────────────────────────────────────
 app.post('/api/apply-payment', async (req, res) => {
   try {
@@ -457,7 +539,7 @@ app.get('/api/playwright-payment', async (req, res) => {
     res.end();
     return;
   }
-  const { clientId, invoiceIds, type, ref, date, amount } = req.query;
+  const { clientId, invoiceIds, type, ref, date, amount, amounts } = req.query;
   if (!clientId || !invoiceIds || !type || !date) {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
@@ -476,10 +558,21 @@ app.get('/api/playwright-payment', async (req, res) => {
   const keepAlive = setInterval(() => res.write(': keep-alive\n\n'), 15000);
   playwrightRunning = true;
 
+  // Build a per-invoice amounts map: `amounts` (JSON, from applyAll) takes precedence;
+  // otherwise fall back to the legacy single `amount` applied to the one invoice (applyOne).
+  // Invoices with no entry use Jobber's default (their full outstanding balance).
+  let amountsMap = null;
+  if (amounts) {
+    try { amountsMap = JSON.parse(amounts); } catch { amountsMap = null; }
+  } else if (amount) {
+    const ids = invoiceIds.split(',').map(s => s.trim()).filter(Boolean);
+    if (ids.length === 1) amountsMap = { [ids[0]]: parseFloat(amount) };
+  }
+
   // On Render: queue for local worker. Locally: run Playwright directly.
   if (process.env.RENDER) {
     const ids = invoiceIds.split(',').map(s => s.trim()).filter(Boolean);
-    const jobId = createJob({ clientId, invoiceIds: ids, type, ref, date, amount: amount ? parseFloat(amount) : null });
+    const jobId = createJob({ clientId, invoiceIds: ids, type, ref, date, amounts: amountsMap });
     send({ type: 'log', text: `Job ${jobId} queued — waiting for local worker to pick up...` });
     console.log(`Job ${jobId} queued: clientId=${clientId} invoiceIds=${ids.join(',')} date=${date}`);
 
@@ -527,7 +620,7 @@ app.get('/api/playwright-payment', async (req, res) => {
     if (batchCount > 1) {
       send({ type: 'log', text: `${ids.length} invoices → ${batchCount} batches of up to 50 (Jobber limit).` });
     }
-    await applyJobberPayment({ clientId, invoiceIds: ids, type, ref, date, amount: amount ? parseFloat(amount) : null, submit: true });
+    await applyJobberPayment({ clientId, invoiceIds: ids, type, ref, date, amounts: amountsMap, submit: true });
     send({ type: 'done', success: true });
   } catch (err) {
     send({ type: 'done', success: false, error: err.message });
@@ -601,21 +694,11 @@ app.post('/api/queue-reset', (req, res) => {
 });
 
 // ── Remittance collector (inline) ────────────────────────────────────────────
+// Sources live in collector/sources/index.js — the single registry both this file and
+// the standalone collector/index.js service use, so a new source only needs adding once.
 const collectorSources = (() => {
   try {
-    return {
-      rely:             require('./collector/sources/rely'),
-      lula:             require('./collector/sources/lula'),
-      orhp:             require('./collector/sources/orhp'),
-      'two-ten':        require('./collector/sources/two-ten'),
-      rheem:            require('./collector/sources/rheem'),
-      'first-american': require('./collector/sources/first-american'),
-      lessen:           require('./collector/sources/lessen-sms-assist'),
-      frontdoor:        require('./collector/sources/frontdoor'),
-      cinch:            require('./collector/sources/cinch'),
-      homeserve:        require('./collector/sources/homeserve'),
-      'all-county-first': require('./collector/sources/all-county-first'),
-    };
+    return require('./collector/sources');
   } catch (e) {
     console.error('Collector sources failed to load:', e.message);
     console.error(e.stack);
