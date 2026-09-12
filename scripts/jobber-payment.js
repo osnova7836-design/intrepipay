@@ -292,21 +292,31 @@ async function clickSubmit(page) {
 // balance), and the "Charge $X" total at the bottom is just their sum. An override must
 // be written into the specific row's field, not a global field (which no longer exists —
 // the old getByLabel(/^amount$/i) selector silently matched nothing).
-async function fillAmountForInvoice(page, invoiceId, amount) {
-  // Jobber's invoice-row markup is plain divs with hashed CSS-module classnames (no
-  // <table>/<tr>, and the classnames change on every Jobber deploy) — so the row can't
-  // be found via a stable tag or class selector. Walk up from the invoice link to the
-  // nearest ancestor holding exactly 2 inputs (its checkbox + its "Enter Payment" field,
-  // confirmed empirically — the field is the last of the two); this is the same
-  // walk-up-from-the-link technique ensureInvoicesChecked already uses to find the
-  // checkbox itself. Stamp that ancestor with a temp marker so Playwright can grab a
-  // real locator for it and type into the field with actual keyboard events (needed for
-  // React-controlled inputs — programmatic .value assignment doesn't register).
+
+// Jobber's invoice-row markup is plain divs with hashed CSS-module classnames (no
+// <table>/<tr>, and the classnames change on every Jobber deploy) — so the row can't
+// be found via a stable tag or class selector. Walk up from the invoice link to the
+// nearest ancestor holding exactly 2 inputs, then take the FIRST one.
+//
+// 2026-09-11 root cause, confirmed by live-inspecting the real page over CDP: those
+// 2 inputs are NOT "checkbox + amount field" as originally assumed — the checkbox
+// lives elsewhere in the row entirely. They're two representations of the same
+// amount cell. The LAST one (type="number", name="invoices.N.paymentAmount") is a
+// deliberately inert shadow field — aria-hidden="true", tabindex="-1", and the
+// standard visually-hidden CSS (clip-path: inset(50%); width/height: 1px) — it just
+// mirrors form state and was never meant to be clicked, focused, or typed into by
+// anyone. Every failure this session (interception, "780" never changing, focus()
+// never sticking) was this same root cause: automating a field that isn't real.
+// The FIRST input (type="text", value like "$780.00", aria-roledescription="Number
+// field") is the actual visible, normal-sized, genuinely interactive field — a
+// plain triple-click + type works on it exactly as it would for any ordinary text
+// input, and typing into it live-updates the hidden shadow field automatically.
+async function findAmountRowAndInput(page, invoiceId) {
   const marker = `data-tp-amount-row-${invoiceId}`;
 
-  // The row was checked earlier by scrolling through the (likely virtualized) list, then
-  // we scrolled back to the top to fill the fields above — the row may no longer be in
-  // the DOM. Scroll back down the same way ensureInvoicesChecked found it originally.
+  // The row may have scrolled out of the (likely virtualized) list's rendered range
+  // since it was last touched. Scroll down the same way ensureInvoicesChecked does
+  // until it's found again.
   for (let i = 0; i < 60; i++) {
     const found = await page.evaluate(({ id, marker }) => {
       const link = document.querySelector(`a[href*="/invoices/${id}"]`);
@@ -328,37 +338,15 @@ async function fillAmountForInvoice(page, invoiceId, amount) {
 
   const row = page.locator(`[${marker}]`);
   await row.waitFor({ state: 'attached', timeout: 10000 });
-  const input = row.locator('input').last();
-  // scrollIntoViewIfNeeded() uses "nearest edge" alignment, which can leave the row
-  // hugging the top of the viewport — right under the sticky list header (see
-  // ATL-DataList-stickyHeader above) — so the click gets intercepted by the header
-  // instead of landing on the field. Centering it clears both that header and any
-  // sticky footer/total bar at the bottom.
-  await input.evaluate(el => el.scrollIntoView({ block: 'center' }));
+  return { row, input: row.locator('input').first() };
+}
+
+async function fillAmountForInvoice(page, invoiceId, amount) {
+  const { input } = await findAmountRowAndInput(page, invoiceId);
+  await input.evaluate(el => el.scrollIntoView({ block: 'center' })).catch(() => {});
   await page.waitForTimeout(150);
 
-  try {
-    await input.click({ clickCount: 3, timeout: 8000 });
-  } catch (err) {
-    // Centering (see comment above) didn't fully fix the sticky-header interception —
-    // this has now recurred on a different invoice/payment, so something else is also
-    // covering the field. Identify the actual blocking element before falling back, so
-    // a repeat failure gives real data instead of another guess, then force the click.
-    // Safe to force: the value-verification check right below still catches a click
-    // that lands on the wrong element (the typed amount won't match afterward).
-    const box = await input.boundingBox();
-    let blocker = 'unknown (no bounding box)';
-    if (box) {
-      blocker = await page.evaluate(({ x, y }) => {
-        const el = document.elementFromPoint(x, y);
-        if (!el) return 'nothing at point';
-        const rect = el.getBoundingClientRect();
-        return `${el.tagName}.${el.className || ''}#${el.id || ''} style-position=${getComputedStyle(el).position} rect=${JSON.stringify(rect)} text="${(el.textContent || '').slice(0, 80)}"`;
-      }, { x: box.x + box.width / 2, y: box.y + box.height / 2 });
-    }
-    console.log(`  Click intercepted on invoice ${invoiceId} amount field — blocked by: ${blocker}. Retrying with force click.`);
-    await input.click({ clickCount: 3, force: true, timeout: 5000 });
-  }
+  await input.click({ clickCount: 3, timeout: 8000 });
   await page.keyboard.type(String(amount), { delay: 50 });
   await page.keyboard.press('Tab');
   await page.waitForTimeout(300);
@@ -368,7 +356,7 @@ async function fillAmountForInvoice(page, invoiceId, amount) {
   // through typing, or a React re-render reset the field, Jobber would otherwise
   // silently submit whatever value is left (its own default full-balance, in the
   // worst case) instead of the override — fail loudly here rather than let that reach
-  // a live payment. (Invoice #146898075/#18043 incidents — see TrackPoint.md.)
+  // a live payment. (Invoice #146898075/#18043/#169575073 incidents — see TrackPoint.md.)
   const actual = await input.inputValue();
   const expected = Number(amount).toFixed(2);
   const actualNum = parseFloat(actual.replace(/[^0-9.-]/g, ''));
