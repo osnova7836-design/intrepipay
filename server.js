@@ -413,6 +413,61 @@ app.post('/api/fix-draft-invoices', async (req, res) => {
   res.json({ results });
 });
 
+// ── Create a missing invoice in Jobber (draft) ────────────────────────────────
+// For remittances with no matching Jobber invoice at all. Created as a Draft
+// (input.markSent omitted) so nothing goes live before the user reviews it —
+// pair with /api/fix-draft-invoices to send it once approved, since that's the
+// path already proven to make a backdated issuedDate stick through send.
+app.post('/api/create-invoice', async (req, res) => {
+  try {
+    const token = await getValidToken();
+    const { clientId, amount, ref, co, issuedDate } = req.body;
+
+    if (!clientId || !amount || !issuedDate) {
+      return res.status(400).json({ error: 'clientId, amount, and issuedDate are required' });
+    }
+
+    const safeName = `${co || ''} — WO ${ref || ''}`.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    const mutation = `mutation {
+      invoiceCreate(input: {
+        clientId: "${clientId}"
+        issuedDate: "${issuedDate}"
+        dueDetails: { invoiceNet: 0 }
+        tax: { taxCalculationMethod: EXCLUSIVE }
+        lineItems: [{ name: "${safeName}", quantity: 1, unitPrice: ${parseFloat(amount)} }]
+      }) {
+        invoice { id invoiceNumber jobberWebUri }
+        userErrors { message path }
+      }
+    }`;
+
+    const mutResp = await fetch(GRAPHQL_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+        'X-JOBBER-GRAPHQL-VERSION': '2025-04-16'
+      },
+      body: JSON.stringify({ query: mutation })
+    });
+
+    const mutData = await mutResp.json();
+    if (mutData.errors) {
+      return res.status(400).json({ error: mutData.errors.map(e => e.message).join(', ') });
+    }
+    const userErrors = mutData.data?.invoiceCreate?.userErrors;
+    if (userErrors?.length > 0) return res.status(400).json({ error: userErrors.map(e => e.message).join(', ') });
+
+    const invoice = mutData.data.invoiceCreate.invoice;
+    console.log(`Invoice created: #${invoice.invoiceNumber} · client ${clientId} · $${amount} · issued ${issuedDate}`);
+    res.json({ success: true, invoice });
+
+  } catch (err) {
+    console.error('Create invoice error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Apply payment to invoice in Jobber ────────────────────────────────────────
 app.post('/api/apply-payment', async (req, res) => {
   try {

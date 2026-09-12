@@ -432,6 +432,7 @@ async function fetchJobberInvoices() {
       'jobberDbId': inv.jobberWebUri ? inv.jobberWebUri.split('/').pop() : '',
       'jobberGqlId': inv.id || '',
       'clientDbId': extractNumericId(inv.client?.id),
+      'clientGqlId': inv.client?.id || '',
       'createdAt': inv.createdAt || '',
     }));
 
@@ -1668,6 +1669,16 @@ function parseRemittance(remit, company) {
   return items;
 }
 
+function findClientGqlId(company) {
+  const coLower = (company || '').toLowerCase();
+  const coKeywords = coLower.split(/[\s\/]+/).filter(w => w.length > 3);
+  const row = jobberRows.find(row => {
+    const client = String(row['Client name'] || '').toLowerCase();
+    return coKeywords.some(kw => client.includes(kw));
+  });
+  return row ? row.clientGqlId : '';
+}
+
 function lookupJobber(ref, company, secondaryRef) {
   const coLower = (company||'').toLowerCase();
   const coKeywords = coLower.split(/[\s\/]+/).filter(w => w.length > 3);
@@ -2401,14 +2412,37 @@ function renderApplyBar(r) {
   const blockReason = r.line_items.find(i => i.status === 'missing') ? 'missing invoices' : 'draft invoices';
   const matchedItems = r.line_items.filter(i => i.status === 'match' || i.status === 'shortpay' || i.status === 'overpay');
   const deductions = r.line_items.filter(i => i.status === 'deduction');
+  const missingItems = r.line_items.filter(i => i.status === 'missing');
   const blockKey = (r.ref || r.co || '').replace(/[^a-zA-Z0-9]/g, '_');
 
   const alreadyPaid = r.line_items.filter(i => i.status === 'already_paid');
-  if (matchedItems.length === 0 && deductions.length === 0) {
+  if (matchedItems.length === 0 && deductions.length === 0 && missingItems.length === 0) {
     if (alreadyPaid.length > 0)
       return `<div class="apply-bar"><span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--green)">✓ Already applied in Jobber (${alreadyPaid.length} payment${alreadyPaid.length!==1?'s':''})</span></div>`;
     return '';
   }
+
+  const missingSection = missingItems.length === 0 ? '' : `
+    <div class="deduction-bar" id="missingbar-${blockKey}">
+      <div class="deduction-bar-title">✗ ${missingItems.length} missing invoice${missingItems.length!==1?'s':''} — create in Jobber before applying</div>
+      ${missingItems.map(m => {
+        const mk = deductionKey(blockKey, m.ref);
+        const safeMk = mk.replace(/[^a-zA-Z0-9_]/g, '_');
+        const amt = Math.abs(m.remittance_amount || 0);
+        const defaultIssued = addDays(r.date, -21);
+        return `<div class="deduction-item" id="mitem-${safeMk}">
+          <span class="deduction-item-info">Claim/WO #${m.ref||'—'} · ${fmt(amt)}</span>
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--text-muted)">Issued</span>
+          <input type="date" id="midate-${safeMk}" value="${defaultIssued}"
+            style="background:var(--surface);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:'IBM Plex Mono',monospace;font-size:11px;padding:3px 5px">
+          <button class="btn-add-deduction" id="mibtn-${safeMk}"
+            onclick="createMissingInvoice(this,'${blockKey}','${safeMk}','${(r.co||'').replace(/'/g,'')}','${(m.ref||'').replace(/'/g,'')}',${amt})">
+            + Create Draft Invoice
+          </button>
+          <span id="miok-${safeMk}" style="display:none;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--green)"></span>
+        </div>`;
+      }).join('')}
+    </div>`;
 
   const deductionSection = deductions.length === 0 ? '' : `
     <div class="deduction-bar" id="dbar-${blockKey}">
@@ -2450,7 +2484,7 @@ function renderApplyBar(r) {
     ? `⛔ Add deductions first`
     : `▶ Apply all ${matchedItems.length} payment${matchedItems.length!==1?'s':''}`;
 
-  return `${deductionSection}${draftSection}<div class="apply-bar">
+  return `${missingSection}${deductionSection}${draftSection}<div class="apply-bar">
     <div class="apply-date">
       <span>Date</span>
       <input type="date" id="date-${blockKey}" value="${r.date || todayISO()}">
@@ -2584,6 +2618,12 @@ function addDeductionToJobber(btn, safeDk, claimRef, matchedInvoice, amount, blo
 
 function todayISO() {
   return new Date().toISOString().split('T')[0];
+}
+
+function addDays(isoDate, days) {
+  const d = new Date((isoDate || todayISO()) + 'T00:00:00');
+  d.setDate(d.getDate() + days);
+  return d.toISOString().split('T')[0];
 }
 
 function streamPayment(params, triggerBtn, invoiceNumbers = []) {
@@ -2836,6 +2876,75 @@ async function fixDraftInvoices(blockKey, btn) {
       btn.textContent = `✉ Send ${drafts.length} draft invoice${drafts.length!==1?'s':''}`;
     }
   }
+}
+
+// Creates a Draft invoice in Jobber for a "missing" line item (no matching invoice
+// found at all), under the correct client, for the remittance amount, backdated to
+// the chosen issued date. Left as a Draft on purpose — reclassifying the item to
+// 'draft' status here means it flows straight into the existing draft-invoice
+// bar/button (fixDraftInvoices), which is the already-proven path for making a
+// backdated issued date stick once the user reviews it in Jobber and sends it.
+async function createMissingInvoice(btn, blockKey, safeMk, co, ref, amount) {
+  const dateInput = document.getElementById(`midate-${safeMk}`);
+  const issuedDate = dateInput ? dateInput.value : todayISO();
+  const okEl = document.getElementById(`miok-${safeMk}`);
+
+  const coLower = (co || '').toLowerCase();
+  const coKeywords = coLower.split(/[\s\/]+/).filter(w => w.length > 3);
+  const sourceRow = jobberRows.find(row => {
+    const client = String(row['Client name'] || '').toLowerCase();
+    return coKeywords.some(kw => client.includes(kw));
+  });
+  if (!sourceRow || !sourceRow.clientGqlId) {
+    if (okEl) { okEl.style.display = ''; okEl.style.color = '#f87171'; okEl.textContent = `✗ No Jobber client found for ${co} — reconnect Jobber and retry.`; }
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Creating…';
+  if (okEl) { okEl.style.display = ''; okEl.style.color = 'var(--text-muted)'; okEl.textContent = ''; }
+
+  let data;
+  try {
+    const resp = await fetch('/api/create-invoice', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ clientId: sourceRow.clientGqlId, amount, ref, co, issuedDate })
+    });
+    data = await resp.json();
+    if (!resp.ok || data.error) throw new Error(data.error || `HTTP ${resp.status}`);
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = '+ Create Draft Invoice';
+    if (okEl) { okEl.style.color = '#f87171'; okEl.textContent = 'Failed: ' + e.message; }
+    return;
+  }
+
+  const invoice = data.invoice;
+  jobberRows.push({
+    'Invoice #': invoice.invoiceNumber,
+    'Subject': '',
+    'Status': 'Draft',
+    'Total ($)': amount,
+    'Client name': sourceRow['Client name'],
+    'jobberWebUri': invoice.jobberWebUri,
+    'jobberDbId': (invoice.jobberWebUri || '').split('/').pop(),
+    'jobberGqlId': invoice.id,
+    'clientDbId': sourceRow.clientDbId,
+    'clientGqlId': sourceRow.clientGqlId,
+    'createdAt': issuedDate,
+  });
+
+  const result = (window._lastResults || []).find(r => (r.ref || r.co || '').replace(/[^a-zA-Z0-9]/g, '_') === blockKey);
+  const item = result?.line_items.find(i => i.status === 'missing' && String(i.ref || '') === String(ref || ''));
+  if (item) {
+    item.status = 'draft';
+    item.jobber_invoice = invoice.invoiceNumber;
+    item.jobber_amount = amount;
+    item.jobber_status = 'Draft';
+    item.difference = 0;
+  }
+
+  renderReport(window._lastResults);
 }
 
 async function applyOne(invoiceNumber, _unused, ref, btn) {
