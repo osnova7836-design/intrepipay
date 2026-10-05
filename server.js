@@ -428,10 +428,15 @@ app.post('/api/create-invoice', async (req, res) => {
     }
 
     const safeName = `${co || ''} — WO ${ref || ''}`.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    // subject must carry the real WO#/ref — lookupJobber/jobberMap in public/index.html
+    // match future remittances against the invoice's `subject` field. Without this,
+    // Jobber defaults the subject to generic boilerplate and the invoice becomes
+    // permanently invisible to TrackPoint's own matching on every later run.
     const mutation = `mutation {
       invoiceCreate(input: {
         clientId: "${clientId}"
         issuedDate: "${issuedDate}"
+        subject: "${safeName}"
         dueDetails: { invoiceNet: 0 }
         tax: { taxCalculationMethod: EXCLUSIVE }
         lineItems: [{ name: "${safeName}", quantity: 1, unitPrice: ${parseFloat(amount)} }]

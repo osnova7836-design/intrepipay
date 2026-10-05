@@ -1672,9 +1672,14 @@ function parseRemittance(remit, company) {
 function findClientGqlId(company) {
   const coLower = (company || '').toLowerCase();
   const coKeywords = coLower.split(/[\s\/]+/).filter(w => w.length > 3);
+  // Was .some() — matching on ANY single word caused a real misfile 2026-09-25:
+  // "Cinch Home Services" matched "Rely Home - CHW/HWA/HSC" purely on the
+  // generic word "home", creating 3 invoices ($610 total) under the wrong
+  // client. .every() requires every keyword present, which is specific
+  // enough to tell "Cinch Home Services" and "Rely Home" apart.
   const row = jobberRows.find(row => {
     const client = String(row['Client name'] || '').toLowerCase();
-    return coKeywords.some(kw => client.includes(kw));
+    return coKeywords.length > 0 && coKeywords.every(kw => client.includes(kw));
   });
   return row ? row.clientGqlId : '';
 }
@@ -1686,9 +1691,13 @@ function lookupJobber(ref, company, secondaryRef) {
   // Only enforce client-name filtering for companies that actually have a Jobber client account.
   // If no invoice in the full dataset has a client matching the company name, the company's
   // invoices are filed under homeowners — skip the filter to avoid false "missing" results.
+  // Was .some() — same real bug as findClientGqlId (see its comment): matching on any single
+  // generic word ("home", "services") could pick an unrelated client's invoices here too,
+  // silently treating them as this company's own "matched" invoice. .every() requires every
+  // keyword present.
   const coHasOwnClient = coKeywords.length > 0 && jobberRows.some(row => {
     const client = String(row['Client name']||'').toLowerCase();
-    return coKeywords.some(kw => client.includes(kw));
+    return coKeywords.every(kw => client.includes(kw));
   });
 
   // Helper: pick best row from candidates by client name match, then highest invoice #
@@ -1697,7 +1706,7 @@ function lookupJobber(ref, company, secondaryRef) {
     if (coHasOwnClient) {
       const clientMatches = rows.filter(row => {
         const client = String(row['Client name']||'').toLowerCase();
-        return coKeywords.some(kw => client.includes(kw));
+        return coKeywords.every(kw => client.includes(kw));
       });
       if (clientMatches.length === 0) return null;
       rows = clientMatches;
@@ -1860,9 +1869,13 @@ function matchPayment(payment) {
     let note = 'Mark paid in Jobber';
     if (item.isDeduction) { status='deduction'; note='Adjustment/deduction'; }
     else if (invStatus === 'Draft') { status='draft'; note='Draft → send invoice & update date'; }
+    // Check already_paid BEFORE the diff-based shortpay/overpay branches: once Jobber itself
+    // says Paid, trust it. Otherwise a recouped-funds deduction (or any prior payment that
+    // legitimately didn't equal the full invoice total) makes diff != 0 forever, and an
+    // already-settled invoice gets wrongly re-flagged as shortpay/overpay on every run.
+    else if (invStatus === 'Paid') { status='already_paid'; note='Already paid in Jobber'; }
     else if (diff > 0.01) { status='shortpay'; note='Short pay: paid '+fmt(Math.abs(item.amount))+' vs invoiced '+fmt(jobberAmt); }
     else if (diff < -0.01) { status='overpay'; note='Over pay: paid '+fmt(Math.abs(item.amount))+' vs invoiced '+fmt(jobberAmt); }
-    else if (invStatus === 'Paid') { status='already_paid'; note='Already paid in Jobber'; }
     else if (invStatus === 'Past Due' || invStatus === 'Awaiting Payment') { status='match'; note='Mark paid in Jobber'; }
 
     return {
@@ -2891,9 +2904,14 @@ async function createMissingInvoice(btn, blockKey, safeMk, co, ref, amount) {
 
   const coLower = (co || '').toLowerCase();
   const coKeywords = coLower.split(/[\s\/]+/).filter(w => w.length > 3);
+  // Was .some() — the real bug that created 3 invoices ($610 total, WO
+  // SCCV74F692C2-2 etc.) under "Rely Home - CHW/HWA/HSC" instead of "Cinch
+  // Home Services - CCH", 2026-09-25: "cinch home services" matched Rely's
+  // client purely on the shared generic word "home". .every() requires
+  // every keyword present in the client name, not just one.
   const sourceRow = jobberRows.find(row => {
     const client = String(row['Client name'] || '').toLowerCase();
-    return coKeywords.some(kw => client.includes(kw));
+    return coKeywords.length > 0 && coKeywords.every(kw => client.includes(kw));
   });
   if (!sourceRow || !sourceRow.clientGqlId) {
     if (okEl) { okEl.style.display = ''; okEl.style.color = '#f87171'; okEl.textContent = `✗ No Jobber client found for ${co} — reconnect Jobber and retry.`; }
@@ -2922,7 +2940,7 @@ async function createMissingInvoice(btn, blockKey, safeMk, co, ref, amount) {
   const invoice = data.invoice;
   jobberRows.push({
     'Invoice #': invoice.invoiceNumber,
-    'Subject': '',
+    'Subject': `${co || ''} — WO ${ref || ''}`,
     'Status': 'Draft',
     'Total ($)': amount,
     'Client name': sourceRow['Client name'],
@@ -2995,6 +3013,7 @@ async function applyAll(ref, co, btn) {
   const invoiceDbIds = [];
   const invoiceNumbers = [];
   let clientDbId = null;
+  let mismatchedClient = null;
   let skippedPaid = 0;
   for (const item of matchedItems) {
     const row = jobberRows.find(r => String(r['Invoice #']).trim() === String(item.jobber_invoice).trim());
@@ -3003,9 +3022,27 @@ async function applyAll(ref, co, btn) {
       return;
     }
     if (row['Status'] === 'Paid') { skippedPaid++; continue; }
+    // Was: silently used whichever matched item's client came first, and
+    // applied the WHOLE batch's payment under that one client ID. Real bug
+    // 2026-09-25: a Cinch remittance had 3 invoices mis-filed under Rely's
+    // client (a separate matching bug, now fixed) — this code picked up
+    // Rely's client ID from those 3, so a real Cinch payment ($610, ref
+    // 300336093) got applied to Rely's account, and the other 7 genuine
+    // Cinch invoices were silently skipped because Jobber's payment page
+    // only shows one client's invoices at a time. Refuse instead of guess
+    // whenever a batch's matched items don't all share one client.
+    if (!clientDbId) clientDbId = row.clientDbId;
+    else if (row.clientDbId !== clientDbId) { mismatchedClient = { invoice: item.jobber_invoice, clientDbId: row.clientDbId }; }
     invoiceDbIds.push(row.jobberDbId);
     invoiceNumbers.push(item.jobber_invoice);
-    if (!clientDbId) clientDbId = row.clientDbId;
+  }
+  if (mismatchedClient) {
+    alert(
+      `Refusing to apply payment: invoice #${mismatchedClient.invoice} belongs to a DIFFERENT Jobber client ` +
+      `than the rest of this batch (client ${mismatchedClient.clientDbId} vs ${clientDbId}). ` +
+      `This usually means one or more invoices were created under the wrong client — check them in Jobber before retrying.`
+    );
+    return;
   }
   if (invoiceDbIds.length === 0) {
     alert(skippedPaid > 0
