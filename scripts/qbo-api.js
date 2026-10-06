@@ -1,21 +1,87 @@
-// QBO (QuickBooks Online) API client — thin wrapper around the passthrough
-// routes on the deployed intrepipay-app server (/api/qbo/invoice/:id,
-// /api/qbo/customer/:id). That server holds the real OAuth tokens
-// (connected live 2026-10-06 via https://intrepipay.com/auth/quickbooks);
-// this script never needs them locally.
+// QBO (QuickBooks Online) API client — calls Intuit's API directly using a
+// LOCALLY stored token (D:\TrackPoint\qbo-tokens.json, gitignored).
 //
-// Replaces scraping the QBO web UI with Playwright, which hit repeated
-// timing bugs (stale-draft loads, SPA render races, 30-60s per lookup) —
-// this returns real JSON in under a second.
+// Confirmed live 2026-10-06: routing every call through the deployed
+// intrepipay-app server broke the same night it was built — Render's
+// free-tier disk is wiped on ANY redeploy (even one unrelated to
+// server.js), which silently killed the QBO connection. The fix: only the
+// INITIAL authorization-code exchange needs that public HTTPS server
+// (Intuit's Production redirect_uri rules require it); refreshing a token
+// needs no redirect_uri at all, so once seeded, this script refreshes and
+// calls quickbooks.api.intuit.com directly — completely decoupled from
+// Render's redeploy cycle from then on.
+//
+// One-time setup after connecting (or reconnecting) via
+// https://intrepipay.com/auth/quickbooks:
+//   node scripts/qbo-api.js --pull-tokens
+// pulls the current tokens down from the server once and saves them here.
+// After that, this file refreshes itself locally — no server involved.
 require('dotenv').config();
+const fs = require('fs');
+const path = require('path');
 
-const { WORKER_SECRET } = process.env;
-const API_BASE = 'https://intrepipay.com';
+const { QUICKBOOKS_CLIENT_ID, QUICKBOOKS_CLIENT_SECRET, WORKER_SECRET } = process.env;
+const QBO_TOKEN_URL = 'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer';
+const QBO_API_BASE = 'https://quickbooks.api.intuit.com';
+const TOKEN_FILE = path.join(__dirname, '..', 'qbo-tokens.json');
 
-async function qboFetch(path) {
-  const resp = await fetch(`${API_BASE}${path}`, {
+function loadTokens() {
+  try {
+    if (fs.existsSync(TOKEN_FILE)) return JSON.parse(fs.readFileSync(TOKEN_FILE, 'utf8'));
+  } catch (e) {}
+  return { access_token: null, refresh_token: null, expires_at: null, realm_id: null };
+}
+
+function saveTokens(t) {
+  fs.writeFileSync(TOKEN_FILE, JSON.stringify(t, null, 2));
+}
+
+function basicAuthHeader() {
+  return 'Basic ' + Buffer.from(`${QUICKBOOKS_CLIENT_ID}:${QUICKBOOKS_CLIENT_SECRET}`).toString('base64');
+}
+
+async function pullTokensFromServer() {
+  const resp = await fetch('https://intrepipay.com/api/qbo/tokens', {
     headers: { 'x-worker-secret': WORKER_SECRET },
     redirect: 'follow',
+  });
+  const data = await resp.json();
+  if (!data.access_token) throw new Error('Server has no QBO tokens — visit https://intrepipay.com/auth/quickbooks first');
+  saveTokens(data);
+  console.log('Pulled tokens from server. realm_id:', data.realm_id);
+}
+
+async function getValidAccessToken() {
+  let t = loadTokens();
+  if (!t.access_token) throw new Error('No local QBO tokens — run: node scripts/qbo-api.js --pull-tokens');
+
+  if (Date.now() > t.expires_at - 60000) {
+    const resp = await fetch(QBO_TOKEN_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Accept: 'application/json',
+        Authorization: basicAuthHeader(),
+      },
+      body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: t.refresh_token }),
+    });
+    const data = await resp.json();
+    if (!data.access_token) throw new Error('QBO refresh failed: ' + JSON.stringify(data));
+    t = {
+      access_token: data.access_token,
+      refresh_token: data.refresh_token,
+      expires_at: Date.now() + (data.expires_in || 3600) * 1000,
+      realm_id: t.realm_id,
+    };
+    saveTokens(t);
+  }
+  return t;
+}
+
+async function qboApiGet(pathSuffix) {
+  const { access_token, realm_id } = await getValidAccessToken();
+  const resp = await fetch(`${QBO_API_BASE}/v3/company/${realm_id}${pathSuffix}`, {
+    headers: { Authorization: `Bearer ${access_token}`, Accept: 'application/json' },
   });
   const data = await resp.json();
   if (!resp.ok) throw new Error(`QBO API ${resp.status}: ${JSON.stringify(data)}`);
@@ -35,7 +101,7 @@ async function getQboInvoice(qboLink) {
   const id = txnIdFromLink(qboLink);
   if (!id) return { error: 'no txnId in link' };
   try {
-    const data = await qboFetch(`/api/qbo/invoice/${id}`);
+    const data = await qboApiGet(`/invoice/${id}`);
     const inv = data.Invoice;
     return {
       id,
@@ -54,7 +120,7 @@ async function getQboCustomer(qboLink) {
   const id = nameIdFromLink(qboLink);
   if (!id) return { error: 'no nameId in link' };
   try {
-    const data = await qboFetch(`/api/qbo/customer/${id}`);
+    const data = await qboApiGet(`/customer/${id}`);
     const c = data.Customer;
     return {
       id,
@@ -69,16 +135,21 @@ async function getQboCustomer(qboLink) {
   }
 }
 
-module.exports = { getQboInvoice, getQboCustomer };
+module.exports = { getQboInvoice, getQboCustomer, pullTokensFromServer };
 
 if (require.main === module) {
-  const link = process.argv[2];
-  if (!link) {
-    console.log('Usage: node scripts/qbo-api.js <qboLink>');
-    process.exit(1);
+  if (process.argv.includes('--pull-tokens')) {
+    pullTokensFromServer().then(() => process.exit(0)).catch((e) => { console.error(e.message); process.exit(1); });
+  } else {
+    const link = process.argv[2];
+    if (!link) {
+      console.log('Usage: node scripts/qbo-api.js --pull-tokens   (one-time, after (re)connecting)');
+      console.log('       node scripts/qbo-api.js <qboLink>        (test a lookup)');
+      process.exit(1);
+    }
+    (async () => {
+      const result = link.includes('nameId') ? await getQboCustomer(link) : await getQboInvoice(link);
+      console.log(JSON.stringify(result, null, 2));
+    })();
   }
-  (async () => {
-    const result = link.includes('nameId') ? await getQboCustomer(link) : await getQboInvoice(link);
-    console.log(JSON.stringify(result, null, 2));
-  })();
 }
