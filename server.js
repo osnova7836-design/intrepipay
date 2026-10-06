@@ -241,6 +241,17 @@ async function getValidQboToken() {
   return { accessToken: qboTokenStore.access_token, realmId: qboTokenStore.realm_id };
 }
 
+// Lets a local script pull the current QBO tokens down ONCE after a
+// reconnect, so it can refresh and call the QBO API directly from then on
+// — confirmed live 2026-10-06 that Render's free-tier disk is wiped on
+// every redeploy (even one unrelated to server.js), which killed the QBO
+// connection the same night it was set up. Token REFRESH needs no
+// redirect_uri, so it works fine from anywhere once seeded; only the
+// initial authorization-code exchange needs this public HTTPS server.
+app.get('/api/qbo/tokens', workerAuth, (req, res) => {
+  res.json(qboTokenStore);
+});
+
 // Thin passthrough so local scripts (e.g. qb-sync-errors-scan.js) can fetch
 // a single invoice/customer by ID as JSON over HTTPS, instead of needing
 // the QBO tokens locally or scraping the QBO web UI. Guarded by the same
