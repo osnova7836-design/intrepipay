@@ -391,6 +391,34 @@ async function setPageSize(page, size) {
 // structure (never inspected live with Playwright's own selectors). Opens
 // each item's detail by exact visible text match, which doesn't depend on
 // the table's internal structure at all.
+// Confirmed live 2026-10-06: the detail panel is a real `role="dialog"`
+// overlay (aria-labelledby="ATL-Modal-Header"), and its ONLY close
+// control is a single icon button with aria-label "Close modal" (no
+// visible text) — confirmed to be the one and only "close"-matching
+// button on the whole page, so it's not a wrong-element problem. The
+// real failure mode: closeBtn.click() was silently swallowed by a
+// .catch() with no verification, so a dialog could stay open and then
+// silently eat the next item's click (Playwright even showed it directly:
+// "<dialog> subtree intercepts pointer events"). This helper actually
+// verifies the dialog is gone from the DOM before returning, retrying
+// the close click up to 4 times. Shared between the scanner and the
+// fixer (qb-sync-errors-fix.js) — both open/close the same detail modal.
+async function closeAnyOpenDialog(page) {
+  const dialogLocator = page.locator('[role="dialog"]');
+  for (let i = 0; i < 4; i++) {
+    const count = await dialogLocator.count().catch(() => 0);
+    if (count === 0) return true;
+    const closeBtn = page.getByRole('button', { name: /close modal|^close$|×|✕/i }).first();
+    if (await closeBtn.count().catch(() => 0)) {
+      await closeBtn.click({ timeout: 5000 }).catch(() => {});
+    } else {
+      await page.keyboard.press('Escape').catch(() => {});
+    }
+    await page.waitForTimeout(700);
+  }
+  return (await dialogLocator.count().catch(() => 0)) === 0;
+}
+
 async function scanAllErrors(page, maxItems, expectedCount = 0) {
   await setPageSize(page, 50);
   await page.waitForTimeout(1500);
@@ -451,36 +479,10 @@ async function scanAllErrors(page, maxItems, expectedCount = 0) {
   const modalOpenMarker = page.getByText('How to fix the error', { exact: false }).first();
   const dialogLocator = page.locator('[role="dialog"]');
 
-  // Confirmed live 2026-10-06: the detail panel is a real `role="dialog"`
-  // overlay (aria-labelledby="ATL-Modal-Header"), and its ONLY close
-  // control is a single icon button with aria-label "Close modal" (no
-  // visible text) — confirmed to be the one and only "close"-matching
-  // button on the whole page, so it's not a wrong-element problem. The
-  // real failure mode: closeBtn.click() was silently swallowed by a
-  // .catch() with no verification, so a dialog could stay open and then
-  // silently eat the next item's click (Playwright even showed it directly:
-  // "<dialog> subtree intercepts pointer events"). This helper actually
-  // verifies the dialog is gone from the DOM before returning, retrying
-  // the close click up to 4 times.
-  async function closeAnyOpenDialog() {
-    for (let i = 0; i < 4; i++) {
-      const count = await dialogLocator.count().catch(() => 0);
-      if (count === 0) return true;
-      const closeBtn = page.getByRole('button', { name: /close modal|^close$|×|✕/i }).first();
-      if (await closeBtn.count().catch(() => 0)) {
-        await closeBtn.click({ timeout: 5000 }).catch(() => {});
-      } else {
-        await page.keyboard.press('Escape').catch(() => {});
-      }
-      await page.waitForTimeout(700);
-    }
-    return (await dialogLocator.count().catch(() => 0)) === 0;
-  }
-
   for (const item of errorsOnly.slice(0, maxItems)) {
     // Defensive pre-check — never attempt a new row click while a dialog
     // from a previous item (successfully closed or not) is still around.
-    const preStillOpen = !(await closeAnyOpenDialog());
+    const preStillOpen = !(await closeAnyOpenDialog(page));
     if (preStillOpen) log(`  WARNING: a dialog was still open before "${item.label}" — forced closed as best-effort`);
 
     log(`Opening: ${item.label} (${item.type})`);
@@ -494,7 +496,7 @@ async function scanAllErrors(page, maxItems, expectedCount = 0) {
         if (attempt > 0) {
           // A previous click may have left a stuck overlay — clear it
           // before retrying instead of just clicking blindly again.
-          await closeAnyOpenDialog();
+          await closeAnyOpenDialog(page);
           await page.waitForTimeout(500);
         }
         await rowText.click({ timeout: 10000 });
@@ -527,7 +529,7 @@ async function scanAllErrors(page, maxItems, expectedCount = 0) {
       }
       // Close the modal and CONFIRM it's actually gone from the DOM
       // (dialogLocator.count() === 0) before moving to the next item.
-      const closedOk = await closeAnyOpenDialog();
+      const closedOk = await closeAnyOpenDialog(page);
       if (!closedOk) log(`  WARNING: modal for "${item.label}" would not close after 4 attempts`);
     } catch (err) {
       log(`  could not open detail for "${item.label}": ${err.message}`);
@@ -634,8 +636,20 @@ async function main() {
   await ctx.close();
 }
 
-main().catch((err) => {
-  console.error('FATAL', err.message);
-  if (LOG_PATH) fs.appendFileSync(LOG_PATH, `FATAL ${err.message}\n`);
-  process.exit(1);
-});
+module.exports = {
+  CHROME_PATH,
+  PROFILE_DIR,
+  navigateToSyncActivity,
+  ensureLoggedIn,
+  waitForStableErrorCount,
+  closeAnyOpenDialog,
+  log,
+};
+
+if (require.main === module) {
+  main().catch((err) => {
+    console.error('FATAL', err.message);
+    if (LOG_PATH) fs.appendFileSync(LOG_PATH, `FATAL ${err.message}\n`);
+    process.exit(1);
+  });
+}
