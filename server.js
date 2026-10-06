@@ -35,12 +35,25 @@ app.use(express.static(path.join(__dirname, 'public'), { etag: false, lastModifi
 const {
   JOBBER_CLIENT_ID,
   JOBBER_CLIENT_SECRET,
+  QUICKBOOKS_CLIENT_ID,
+  QUICKBOOKS_CLIENT_SECRET,
   APP_URL = 'https://intrepipay.com'
 } = process.env;
 
 const REDIRECT_URI = `${APP_URL}/auth/jobber/callback`;
 const TOKEN_URL = 'https://api.getjobber.com/api/oauth/token';
 const GRAPHQL_URL = 'https://api.getjobber.com/api/graphql';
+
+// Must match EXACTLY (scheme, path, no trailing slash) what's registered
+// under Redirect URIs on developer.intuit.com for this app's PRODUCTION
+// keys — confirmed live 2026-10-06 that URI is already registered as
+// "https://intrepipay.com/auth/quickbooks/callback" (someone set this up
+// previously). Production QBO apps reject HTTP, IP-address, and localhost
+// redirect URIs outright — this has to be the real deployed HTTPS server.
+const QBO_REDIRECT_URI = `${APP_URL}/auth/quickbooks/callback`;
+const QBO_TOKEN_URL = 'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer';
+const QBO_AUTH_URL = 'https://appcenter.intuit.com/connect/oauth2';
+const QBO_API_BASE = 'https://quickbooks.api.intuit.com';
 
 // ── Persistent token storage ──────────────────────────────────────────────────
 const TOKEN_FILE = path.join(__dirname, 'tokens.json');
@@ -61,6 +74,30 @@ function saveTokens(tokens) {
 }
 
 let tokenStore = loadTokens();
+
+// ── QBO token storage (separate file — never shares Jobber's tokens.json) ─────
+// NOTE: Render's free-tier disk is ephemeral — this file survives idle
+// spin-down/wake but is WIPED on an actual redeploy, same limitation the
+// Jobber tokens.json above already has. Reconnecting (visit /auth/quickbooks)
+// takes under a minute, so this is an acceptable tradeoff, not a blocker.
+const QBO_TOKEN_FILE = path.join(__dirname, 'qbo-tokens.json');
+
+function loadQboTokens() {
+  try {
+    if (fs.existsSync(QBO_TOKEN_FILE)) {
+      return JSON.parse(fs.readFileSync(QBO_TOKEN_FILE, 'utf8'));
+    }
+  } catch (e) { console.error('QBO token load error:', e.message); }
+  return { access_token: null, refresh_token: null, expires_at: null, realm_id: null };
+}
+
+function saveQboTokens(tokens) {
+  try {
+    fs.writeFileSync(QBO_TOKEN_FILE, JSON.stringify(tokens));
+  } catch (e) { console.error('QBO token save error:', e.message); }
+}
+
+let qboTokenStore = loadQboTokens();
 
 // ── Step 1: Send user to Jobber to authorize ──────────────────────────────────
 app.get('/auth/jobber', (req, res) => {
@@ -110,6 +147,127 @@ app.get('/auth/jobber/callback', async (req, res) => {
   } catch (err) {
     console.error('OAuth error:', err);
     res.send('OAuth error: ' + err.message);
+  }
+});
+
+// ── QBO (QuickBooks Online) OAuth — mirrors the Jobber flow above ─────────────
+// One-time setup: visit /auth/quickbooks, approve in Intuit's consent
+// screen, callback stores access_token/refresh_token/realm_id.
+app.get('/auth/quickbooks', (req, res) => {
+  const url = `${QBO_AUTH_URL}?` +
+    `client_id=${QUICKBOOKS_CLIENT_ID}` +
+    `&response_type=code` +
+    `&scope=${encodeURIComponent('com.intuit.quickbooks.accounting')}` +
+    `&redirect_uri=${encodeURIComponent(QBO_REDIRECT_URI)}` +
+    `&state=qbo-connect`;
+  res.redirect(url);
+});
+
+app.get('/auth/quickbooks/callback', async (req, res) => {
+  const { code, realmId, error } = req.query;
+
+  if (error || !code) {
+    return res.send('QBO authorization failed: ' + (error || 'no code received'));
+  }
+
+  try {
+    const basicAuth = Buffer.from(`${QUICKBOOKS_CLIENT_ID}:${QUICKBOOKS_CLIENT_SECRET}`).toString('base64');
+    const response = await fetch(QBO_TOKEN_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Accept: 'application/json',
+        Authorization: `Basic ${basicAuth}`,
+      },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: QBO_REDIRECT_URI,
+      }),
+    });
+
+    const data = await response.json();
+
+    if (!data.access_token) {
+      return res.send('QBO token exchange failed: ' + JSON.stringify(data));
+    }
+
+    qboTokenStore = {
+      access_token: data.access_token,
+      refresh_token: data.refresh_token,
+      expires_at: Date.now() + ((data.expires_in || 3600) * 1000),
+      realm_id: realmId || qboTokenStore.realm_id,
+    };
+    saveQboTokens(qboTokenStore);
+    console.log('QBO connected successfully, realmId:', realmId);
+    res.send(`QBO connected. realmId: ${realmId}. You can close this tab.`);
+  } catch (err) {
+    console.error('QBO OAuth error:', err);
+    res.send('QBO OAuth error: ' + err.message);
+  }
+});
+
+async function getValidQboToken() {
+  if (!qboTokenStore.access_token) throw new Error('Not connected to QBO — visit /auth/quickbooks first');
+
+  if (Date.now() > qboTokenStore.expires_at - 60000) {
+    const basicAuth = Buffer.from(`${QUICKBOOKS_CLIENT_ID}:${QUICKBOOKS_CLIENT_SECRET}`).toString('base64');
+    const response = await fetch(QBO_TOKEN_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Accept: 'application/json',
+        Authorization: `Basic ${basicAuth}`,
+      },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: qboTokenStore.refresh_token,
+      }),
+    });
+    let data;
+    try { data = await response.json(); } catch (e) { data = {}; }
+    if (!data.access_token) {
+      throw new Error('QBO refresh failed: ' + JSON.stringify(data));
+    }
+    qboTokenStore = {
+      access_token: data.access_token,
+      refresh_token: data.refresh_token,
+      expires_at: Date.now() + ((data.expires_in || 3600) * 1000),
+      realm_id: qboTokenStore.realm_id,
+    };
+    saveQboTokens(qboTokenStore);
+  }
+
+  return { accessToken: qboTokenStore.access_token, realmId: qboTokenStore.realm_id };
+}
+
+// Thin passthrough so local scripts (e.g. qb-sync-errors-scan.js) can fetch
+// a single invoice/customer by ID as JSON over HTTPS, instead of needing
+// the QBO tokens locally or scraping the QBO web UI. Guarded by the same
+// WORKER_SECRET header other worker-only routes use.
+app.get('/api/qbo/invoice/:id', workerAuth, async (req, res) => {
+  try {
+    const { accessToken, realmId } = await getValidQboToken();
+    const r = await fetch(`${QBO_API_BASE}/v3/company/${realmId}/invoice/${req.params.id}`, {
+      headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
+    });
+    const data = await r.json();
+    res.status(r.status).json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/qbo/customer/:id', workerAuth, async (req, res) => {
+  try {
+    const { accessToken, realmId } = await getValidQboToken();
+    const r = await fetch(`${QBO_API_BASE}/v3/company/${realmId}/customer/${req.params.id}`, {
+      headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
+    });
+    const data = await r.json();
+    res.status(r.status).json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 

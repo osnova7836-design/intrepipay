@@ -3,6 +3,7 @@ node_modules/
 .env
 .env.local
 tokens.json
+qbo-tokens.json
 trackpoint.env
 *.orig
 intercept-log.json
