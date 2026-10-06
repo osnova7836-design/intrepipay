@@ -212,7 +212,11 @@ async function executeIgnores(toIgnore) {
   return results;
 }
 
-main().catch((err) => {
-  console.error('FATAL', err.message);
-  process.exit(1);
-});
+module.exports = { planAction, buildPlan, clickIgnoreForItem, executeIgnores };
+
+if (require.main === module) {
+  main().catch((err) => {
+    console.error('FATAL', err.message);
+    process.exit(1);
+  });
+}
