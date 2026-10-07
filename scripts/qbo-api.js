@@ -104,6 +104,34 @@ async function qboQuery(sql) {
   return data;
 }
 
+async function qboPost(pathSuffix, body) {
+  const { access_token, realm_id } = await getValidAccessToken();
+  const url = `${QBO_API_BASE}/v3/company/${realm_id}${pathSuffix}`;
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${access_token}`, Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(`QBO POST ${pathSuffix} failed ${resp.status}: ${JSON.stringify(data)}`);
+  return data;
+}
+
+// Creates a real Deposit moving ONE payment out of Undeposited Funds into
+// the actual bank account -- confirmed live 2026-10-07 for the Undeposited
+// Funds backlog cleanup (each confirmed payment gets its OWN deposit, no
+// grouping-by-date guessing about how they were actually bundled at the
+// bank, per Os's explicit call). Uses the payment's own TxnDate so the
+// deposit lands on the real historical date the money came in, not today.
+async function createDepositForPayment({ paymentId, amount, txnDate, bankAccountId }) {
+  const body = {
+    TxnDate: txnDate,
+    DepositToAccountRef: { value: bankAccountId },
+    Line: [{ Amount: amount, LinkedTxn: [{ TxnId: paymentId, TxnType: 'Payment', TxnLineId: '0' }] }],
+  };
+  return qboPost('/deposit', body);
+}
+
 function txnIdFromLink(qboLink) {
   const m = (qboLink || '').match(/txnId=(\d+)/);
   return m ? m[1] : null;
@@ -151,7 +179,7 @@ async function getQboCustomer(qboLink) {
   }
 }
 
-module.exports = { getQboInvoice, getQboCustomer, pullTokensFromServer, qboQuery };
+module.exports = { getQboInvoice, getQboCustomer, pullTokensFromServer, qboQuery, createDepositForPayment };
 
 if (require.main === module) {
   if (process.argv.includes('--pull-tokens')) {
