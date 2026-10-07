@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ycheten — Statement → Journal Entry</title>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#f5f3ef;--surface:#fff;--surface2:#f0ede8;--surface3:#e8e4dd;
+  --teal:#007a63;--teal-light:#00a688;--teal-bg:#e6f4f1;--teal-border:#b3ddd6;
+  --amber:#b45309;--amber-bg:#fef3c7;--amber-border:#fcd34d;
+  --red:#b91c1c;--red-bg:#fee2e2;--red-border:#fca5a5;
+  --green:#15803d;--green-bg:#dcfce7;--green-border:#86efac;
+  --text:#1c1917;--text-dim:#57534e;--text-muted:#a8a29e;
+  --border:#e2ddd8;--border-strong:#c8c3bc;
+  --shadow:0 1px 3px rgba(0,0,0,0.08);--shadow-md:0 4px 6px rgba(0,0,0,0.07);
+}
+body{background:var(--bg);color:var(--text);font-family:'IBM Plex Sans',sans-serif;font-size:14px;min-height:100vh;line-height:1.6}
+.header{background:var(--text);padding:0.25rem 2rem;display:flex;align-items:center;justify-content:space-between}
+.header-left{display:flex;align-items:center;gap:14px}
+.back-link{font-family:'IBM Plex Mono',monospace;font-size:11px;color:rgba(255,255,255,0.5);text-decoration:none;letter-spacing:0.05em}
+.back-link:hover{color:#fff}
+.page-title{font-family:'Playfair Display',serif;font-size:22px;font-weight:700;color:#fff}
+.page-title span{color:#00c9a7}
+.header-right{font-family:'IBM Plex Mono',monospace;font-size:11px;color:rgba(255,255,255,0.4)}
+
+.wrap{max-width:720px;margin:0 auto;padding:2.5rem 1.5rem 4rem}
+.intro{font-size:13px;color:var(--text-dim);margin-bottom:1.75rem}
+
+.card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:1.75rem;box-shadow:var(--shadow);margin-bottom:1.5rem}
+
+.upload-zone{border:1.5px dashed var(--border-strong);border-radius:10px;padding:2.5rem 1rem;text-align:center;cursor:pointer;transition:all 0.2s;background:var(--surface2);position:relative;display:flex;flex-direction:column;align-items:center;gap:6px}
+.upload-zone:hover{border-color:var(--teal);background:var(--teal-bg)}
+.upload-zone.dragover{border-color:var(--teal);background:var(--teal-bg)}
+.upload-zone input{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%}
+.uz-icon{font-size:28px}
+.uz-title{font-size:14px;color:var(--text);font-weight:500}
+.uz-sub{font-size:11px;color:var(--text-muted);font-family:'IBM Plex Mono',monospace}
+
+.spinner{display:flex;align-items:center;justify-content:center;gap:10px;padding:2rem;font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--text-dim)}
+
+.preview-head{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:1rem}
+.preview-vendor{font-family:'Playfair Display',serif;font-size:20px;font-weight:700}
+.preview-file{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--text-muted)}
+
+.je-table{width:100%;border-collapse:collapse;margin:.75rem 0 1.25rem;font-size:13px}
+.je-table th{text-align:left;font-family:'IBM Plex Mono',monospace;font-size:10px;letter-spacing:0.06em;text-transform:uppercase;color:var(--text-muted);padding:6px 8px;border-bottom:1px solid var(--border)}
+.je-table td{padding:8px 8px;border-bottom:1px solid var(--border)}
+.je-table .amt{text-align:right;font-variant-numeric:tabular-nums}
+
+.net-amount{background:var(--teal-bg);border:1px solid var(--teal-border);border-radius:8px;padding:12px 16px;display:flex;justify-content:space-between;align-items:center;margin-bottom:1.25rem}
+.net-amount .label{font-size:12px;color:var(--text-dim)}
+.net-amount .val{font-family:'IBM Plex Mono',monospace;font-size:20px;font-weight:600;color:var(--teal)}
+
+.meta-row{font-size:12px;color:var(--text-dim);margin-bottom:4px}
+.meta-row b{color:var(--text)}
+
+.btn{padding:10px 18px;border-radius:7px;font-family:'IBM Plex Mono',monospace;font-size:11px;cursor:pointer;transition:all 0.15s;letter-spacing:0.06em;text-transform:uppercase;border:none;font-weight:500}
+.btn-primary{background:var(--teal);color:#fff}
+.btn-primary:hover{background:var(--teal-light)}
+.btn-primary:disabled{opacity:0.5;cursor:not-allowed}
+.btn-outline{background:none;border:1px solid var(--border-strong);color:var(--text-dim)}
+.btn-outline:hover{border-color:var(--teal);color:var(--teal)}
+.actions{display:flex;gap:10px;margin-top:.5rem}
+
+.error-box{background:var(--red-bg);border:1px solid var(--red-border);color:var(--red);border-radius:8px;padding:14px 16px;font-size:13px}
+.success-box{background:var(--green-bg);border:1px solid var(--green-border);color:var(--green);border-radius:8px;padding:14px 16px;font-size:13px}
+.success-box b{font-family:'IBM Plex Mono',monospace}
+
+.log-section-title{font-family:'IBM Plex Mono',monospace;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;color:var(--text-dim);margin-bottom:.75rem}
+.log-row{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border);font-size:12.5px}
+.log-row:last-child{border-bottom:none}
+.log-vendor{font-weight:500}
+.log-sub{color:var(--text-muted);font-size:11px}
+.log-amt{font-family:'IBM Plex Mono',monospace;color:var(--teal);font-weight:500}
+.log-empty{color:var(--text-muted);font-size:12.5px;padding:.5rem 0}
+</style>
+</head>
+<body>
+
+<header class="header">
+  <div class="header-left">
+    <a class="back-link" href="/">← TrackPoint</a>
+    <div class="page-title">Y<span>cheten</span></div>
+  </div>
+  <div class="header-right">Statement → Journal Entry</div>
+</header>
+
+<div class="wrap">
+  <p class="intro">Upload a card statement PDF. Ycheten reads it, shows you the exact journal entry it would create, and only writes to QuickBooks once you confirm.</p>
+
+  <div class="card" id="upload-card">
+    <label class="upload-zone" id="upload-zone">
+      <div class="uz-icon">📄</div>
+      <div class="uz-title">Drop a statement PDF here, or click to choose</div>
+      <div class="uz-sub">Home Depot · Lowe's (more vendors coming as statements come in)</div>
+      <input type="file" id="file-input" accept="application/pdf">
+    </label>
+  </div>
+
+  <div id="result-zone"></div>
+
+  <div class="card">
+    <div class="log-section-title">Recent entries</div>
+    <div id="log-list"><div class="log-empty">Loading…</div></div>
+  </div>
+</div>
+
+<script>
+const zone = document.getElementById('upload-zone');
+const fileInput = document.getElementById('file-input');
+const resultZone = document.getElementById('result-zone');
+let currentParsed = null;
+
+fileInput.addEventListener('change', () => { if (fileInput.files[0]) handleFile(fileInput.files[0]); });
+zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('dragover'); });
+zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
+zone.addEventListener('drop', e => {
+  e.preventDefault();
+  zone.classList.remove('dragover');
+  if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+});
+
+function fmt(n) { return '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+
+async function handleFile(file) {
+  resultZone.innerHTML = `<div class="card"><div class="spinner">⏳ Reading ${file.name}…</div></div>`;
+  const fd = new FormData();
+  fd.append('statement', file);
+  try {
+    const resp = await fetch('/api/ycheten/parse', { method: 'POST', body: fd });
+    const data = await resp.json();
+    if (!resp.ok || !data.ok) {
+      resultZone.innerHTML = `<div class="card"><div class="error-box">${data.error || 'Could not read this statement.'}</div></div>`;
+      return;
+    }
+    currentParsed = data;
+    renderPreview(data);
+  } catch (err) {
+    resultZone.innerHTML = `<div class="card"><div class="error-box">Upload failed: ${err.message}</div></div>`;
+  }
+}
+
+function renderPreview(p) {
+  resultZone.innerHTML = `
+    <div class="card">
+      <div class="preview-head">
+        <div class="preview-vendor">${p.vendor}</div>
+        <div class="preview-file">${p.filename}</div>
+      </div>
+      <div class="meta-row">Closing date: <b>${p.closingDate}</b></div>
+      <div class="meta-row">Purchases: <b>${fmt(p.purchases)}</b> &nbsp;&nbsp; Credits: <b>${fmt(p.credits)}</b></div>
+
+      <div class="net-amount">
+        <div class="label">Net amount to record</div>
+        <div class="val">${fmt(p.netAmount)}</div>
+      </div>
+
+      <table class="je-table">
+        <tr><th>Account</th><th class="amt">Debit</th><th class="amt">Credit</th></tr>
+        <tr><td>${p.accounts.debit.name}</td><td class="amt">${fmt(p.netAmount)}</td><td class="amt">—</td></tr>
+        <tr><td>${p.accounts.credit.name}</td><td class="amt">—</td><td class="amt">${fmt(p.netAmount)}</td></tr>
+      </table>
+      <div class="meta-row">Journal no.: <b>${p.docNumber}</b></div>
+
+      <div class="actions">
+        <button class="btn btn-primary" id="confirm-btn" onclick="confirmEntry()">Create in QuickBooks</button>
+        <button class="btn btn-outline" onclick="resetUpload()">Cancel</button>
+      </div>
+    </div>`;
+}
+
+async function confirmEntry() {
+  const btn = document.getElementById('confirm-btn');
+  btn.disabled = true;
+  btn.textContent = 'Creating…';
+  try {
+    const resp = await fetch('/api/ycheten/confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(currentParsed),
+    });
+    const data = await resp.json();
+    if (!resp.ok || !data.ok) {
+      resultZone.innerHTML = `<div class="card"><div class="error-box">${data.error || 'Could not create the journal entry.'}</div></div>`;
+      return;
+    }
+    resultZone.innerHTML = `
+      <div class="card">
+        <div class="success-box">
+          Created Journal Entry <b>#${data.jeId}</b> for ${currentParsed.vendor}, ${fmt(currentParsed.netAmount)}.<br>
+          ${data.newAccountBalance !== null ? `${currentParsed.accounts.credit.name} balance is now <b>${fmt(data.newAccountBalance)}</b>.` : ''}
+        </div>
+        <div class="actions"><button class="btn btn-outline" onclick="resetUpload()">Upload another</button></div>
+      </div>`;
+    loadLog();
+  } catch (err) {
+    resultZone.innerHTML = `<div class="card"><div class="error-box">Write failed: ${err.message}</div></div>`;
+  }
+}
+
+function resetUpload() {
+  currentParsed = null;
+  fileInput.value = '';
+  resultZone.innerHTML = '';
+}
+
+async function loadLog() {
+  const list = document.getElementById('log-list');
+  try {
+    const resp = await fetch('/api/ycheten/log');
+    const entries = await resp.json();
+    if (!entries.length) { list.innerHTML = '<div class="log-empty">Nothing processed yet.</div>'; return; }
+    list.innerHTML = entries.slice(0, 20).map(e => `
+      <div class="log-row">
+        <div>
+          <div class="log-vendor">${e.vendor} <span class="log-sub">JE #${e.id}</span></div>
+          <div class="log-sub">${e.closingDate} · ${e.filename || ''}</div>
+        </div>
+        <div class="log-amt">${fmt(e.netAmount)}</div>
+      </div>`).join('');
+  } catch (err) {
+    list.innerHTML = `<div class="log-empty">Could not load history: ${err.message}</div>`;
+  }
+}
+loadLog();
+</script>
+</body>
+</html>

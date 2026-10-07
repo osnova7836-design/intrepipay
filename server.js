@@ -977,6 +977,10 @@ app.post('/api/collect', async (req, res) => {
   res.json({ results: allResults, errors, total: allResults.length });
 });
 
+// ── Ycheten (statement → journal entry) ───────────────────────────────────────
+app.use('/api/ycheten', require('./ycheten/routes'));
+app.get('/ycheten', (req, res) => res.sendFile(path.join(__dirname, 'public', 'ycheten.html')));
+
 // ── Local worker endpoints ────────────────────────────────────────────────────
 
 // Worker polls this to get the next pending job.

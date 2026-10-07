@@ -88,6 +88,19 @@ async function qboApiGet(pathSuffix) {
   return data;
 }
 
+// Read-only QBO Reports API passthrough (P&L, Balance Sheet, etc.) --
+// params is a plain object of query-string args, e.g.
+// { start_date: '2026-01-01', end_date: '2026-10-07', summarize_column_by: 'Month' }.
+async function qboReport(reportName, params = {}) {
+  const { access_token, realm_id } = await getValidAccessToken();
+  const qs = new URLSearchParams(params).toString();
+  const url = `${QBO_API_BASE}/v3/company/${realm_id}/reports/${reportName}${qs ? '?' + qs : ''}`;
+  const resp = await fetch(url, { headers: { Authorization: `Bearer ${access_token}`, Accept: 'application/json' } });
+  const data = await resp.json();
+  if (!resp.ok) throw new Error(`QBO report ${reportName} failed ${resp.status}: ${JSON.stringify(data)}`);
+  return data;
+}
+
 // Read-only QBO SQL-like query passthrough (SELECT ... FROM <Entity> WHERE
 // ...), e.g. used to find every Payment sharing a given PaymentRefNum —
 // confirmed live 2026-10-06 that QBO silently SPLITS one large check into
@@ -195,7 +208,7 @@ async function getQboCustomer(qboLink) {
   }
 }
 
-module.exports = { getQboInvoice, getQboCustomer, pullTokensFromServer, qboQuery, createDepositForPayment, createJournalEntry };
+module.exports = { getQboInvoice, getQboCustomer, pullTokensFromServer, qboQuery, qboReport, createDepositForPayment, createJournalEntry };
 
 if (require.main === module) {
   if (process.argv.includes('--pull-tokens')) {
