@@ -1,35 +1,39 @@
-// Ycheten — verifies QBO "For Review" bank-feed lines against real Jobber
-// payment records, the same way qb-verify-checklog.js verifies a check log
-// against checkNumber.
+// Ycheten — verifies a QBO "For Review" bank-feed line against real Jobber
+// payment records. The matching logic is BUILT AROUND the payment
+// reference number, not amount+date proximity — confirmed live 2026-10-06
+// across 6 real items that amount+date alone produces false confidence
+// (a $145 item had 2 identical-amount, identical-client candidates only a
+// reference number could tell apart) and sometimes QBO's own suggested
+// payee is flat wrong (a $100 Zelle labeled "Loretta Johnson" was actually
+// "Marina Harmon" — only provable because the Zelle confirmation number
+// matched Jobber's record exactly).
 //
-// Confirmed live 2026-10-06 (FAHW $145 case): the bank ACH description's
-// "ID:XXXXXXX" number is often a CONSTANT vendor/batch id the payer reuses
-// across unrelated payments (confirmed: FAHW's "ID:1164427" appeared on
-// both this $145 item AND a completely different $1,555 payment from a
-// different date) — NOT a per-transaction reference, so it never matches
-// anything and isn't worth comparing against. The real per-payment key is
-// each payment type's own identifying field in Jobber:
+// Each Jobber payment type carries its own identifying field:
 //   CheckPaymentRecord              -> checkNumber
 //   CreditCardPaymentRecord         -> ccTransactionNumber
 //   JobberPayments*PaymentRecord    -> transactionId
 //   AchBankPayment/BankTransfer/CashApp/ETransfer/Other/Paypal/Venmo/Zelle
-//                                    -> confirmationNumber (e.g. FAHW's
-//                                       "EFTPY061919" — this IS unique per
-//                                       payment and is what finally proved
-//                                       the $145 case against two identical-
-//                                       amount, identical-client decoys)
+//                                    -> confirmationNumber
+// This pulls every plausible reference token out of the bank feed's raw
+// description text automatically (ID:, Conf#, trailing digits after an
+// XXXXX mask, etc.) and matches them against those fields directly —
+// CONFIRMED only ever means a reference number actually matched. A single
+// amount+date candidate with no reference to check against is reported
+// separately as UNCONFIRMED_SINGLE_MATCH, never CONFIRMED, since that was
+// exactly the kind of false confidence that caused problems before.
 //
-// Uses the top-level `paymentRecords(filter: {clientId, entryDate})` query
-// (confirmed live 2026-10-06 it exists, 30k+ records, filterable) instead
-// of walking each invoice's own paymentRecords — faster, and crucially
-// also surfaces UNAPPLIED payments an invoice-based search would miss
-// entirely (the $145 case: the real payment was recorded on invoice
-// #20978, but a `paymentRecords` global scan found it in one query instead
-// of needing to already know which invoice to check).
+// Watch out: some payers reuse a constant vendor/batch ID across
+// unrelated payments (confirmed: FAHW's "ID:1164427" appeared on two
+// different payments on two different dates) — that number will never
+// match anything and isn't a bug when it doesn't.
 //
-// Read-only. Reports CONFIRMED (via confirmationNumber/checkNumber/etc, OR
-// a single clean amount+date match with nothing else to prove against) /
-// AMBIGUOUS / NOT_FOUND per item — never auto-matches anything in QBO.
+// Usage:
+//   node scripts/qb-for-review-verify.js --amount 145.00 --date 09/17/2026 \
+//     --detail "1ST AME WARRANTY DES:PAYABLES ID:1164427..." \
+//     --qbo-payee "Rely Home - CHW/HWA/HSC"
+//   node scripts/qb-for-review-verify.js --file items.json   (batch; see ITEM_SHAPE below)
+//
+// Read-only. Never writes or matches anything in QBO.
 
 const fs = require('fs');
 const path = require('path');
@@ -38,26 +42,7 @@ const JOBBER_GRAPHQL_URL = 'https://api.getjobber.com/api/graphql';
 const TOKEN_FILE = path.join(__dirname, '..', 'tokens.json');
 const TOKEN_URL = 'https://api.getjobber.com/api/oauth/token';
 
-// refCandidates: every ID-looking token pulled from the raw bank detail —
-// full numbers where visible, trailing digits where QBO masked them. Any
-// one matching a payment's confirmationNumber/checkNumber/etc counts as
-// proof. nameHints: every client name worth trying, QBO's suggested payee
-// included but never trusted alone (confirmed wrong before — the $145
-// case: QBO said "Rely Home", the real client was FAHW).
-const ITEMS = [
-  // Resolved 2026-10-06 outside this script: QBO's own suggested-matches
-  // list independently surfaced "Payment EFTPY061919 09/14/2026 $145.00
-  // FAHW" -- exactly matching Jobber invoice #20978's confirmationNumber.
-  // "1164427" is FAHW's constant vendor/batch id (confirmed it also
-  // appears on an unrelated $1,555 payment from a different date) -- never
-  // a usable refCandidate, intentionally left out here.
-  { amount: 145.00, date: '09/17/2026', qboPayee: 'Rely Home - CHW/HWA/HSC', bankDetail: '1ST AME WARRANTY DES:PAYABLES ID:1164427 INDN:TB PLUMBING CO ID:XXXXX96164 PPD', nameHints: ['Rely Home', 'FIRST AMERICAN HOME WARRENTY'], refCandidates: [] },
-  { amount: 65.00, date: '09/09/2026', qboPayee: 'Rely Home - CHW/HWA/HSC', bankDetail: 'BKOFAMERICA MOBILE 09/09 XXXXX02527 DEPOSIT *MOBILE FL', nameHints: ['Rely Home'], refCandidates: ['02527', '2527'] },
-  { amount: 90.00, date: '10/01/2026', qboPayee: 'Rely Home - CHW/HWA/HSC', bankDetail: 'Cinch PMD DES:PAYMENT ID:XXXXX7095 INDN:TBPlumbing.Receivables CO ID:XXXXX32275 CCD', nameHints: ['Rely Home', 'Cinch'], refCandidates: ['7095', '32275'] },
-  { amount: 165.00, date: '09/28/2026', qboPayee: 'Old Republic Home Protection - ORHP', bankDetail: 'BKOFAMERICAATM 09/25 XXXXX3391 DEPOSIT CLERMONT CLERMONT FL CKCD XXXXXXXXXX078679', nameHints: ['Old Republic'], refCandidates: ['3391', '078679', '78679'] },
-  { amount: 75.00, date: '09/23/2026', qboPayee: 'Jamain Braxton', bankDetail: 'XXXXX0248 DES:AHI LLC OP ID: INDN:THE BEST PLUMBING GROU CO ID:XXXXX03566 CCD', nameHints: ['Jamain Braxton', 'AHI'], refCandidates: ['0248', '248', '03566', '3566'] },
-  { amount: 100.00, date: '09/10/2026', qboPayee: 'Loretta Johnson', bankDetail: 'Zelle payment from MARINA HARMON for "TOILET"; Conf# T22MSKBWV', nameHints: ['Loretta Johnson', 'Marina Harmon'], refCandidates: ['T22MSKBWV'] },
-];
+// Batch file shape: [{ amount, date: "MM/DD/YYYY", detail, qboPayee, nameHints?: [] }, ...]
 
 async function getToken() {
   require('dotenv').config();
@@ -103,6 +88,22 @@ function parseLooseDate(s) {
   return new Date(year, Number(m[1]) - 1, Number(m[2]));
 }
 
+// Pulls every plausible reference token out of raw bank-feed text:
+//   - "Conf# XXXXXXX" / "Conf#XXXXXXX"           -> the code itself
+//   - "ID:1164427" / "ID:XXXXX96164"              -> digits (masked or not)
+//   - a bare "XXXXX0248" mask anywhere in the text -> its trailing digits
+//   - any standalone run of 5+ digits               -> as a last resort
+// Short tokens (<4 chars) are dropped — too likely to false-match.
+function extractRefCandidates(detail) {
+  const found = new Set();
+  const confMatch = detail.match(/Conf#\s*([A-Z0-9]+)/i);
+  if (confMatch) found.add(confMatch[1]);
+  for (const m of detail.matchAll(/ID:\s*X*([0-9]{4,})/gi)) found.add(m[1]);
+  for (const m of detail.matchAll(/X{4,}([0-9]{4,})/g)) found.add(m[1]);
+  for (const m of detail.matchAll(/\b([0-9]{5,})\b/g)) found.add(m[1]);
+  return [...found].filter((s) => s.length >= 4);
+}
+
 async function findClientIds(token, name) {
   const q = `{ clients(searchTerm: ${JSON.stringify(name)}, first: 5) { nodes { id name } } }`;
   const data = await gql(token, q);
@@ -135,7 +136,6 @@ async function findPaymentsForClient(token, clientId, amount, dateObj, windowDay
   const after = new Date(dateObj.getTime() - windowDays * 86400000).toISOString();
   const before = new Date(dateObj.getTime() + windowDays * 86400000).toISOString();
   const q = `{ paymentRecords(filter: { clientId: "${clientId}", entryDate: { after: ${JSON.stringify(after)}, before: ${JSON.stringify(before)} } }, first: 50) {
-    totalCount
     nodes { ${PAYMENT_DETAIL_FRAGMENT} }
   } }`;
   const data = await gql(token, q);
@@ -143,32 +143,28 @@ async function findPaymentsForClient(token, clientId, amount, dateObj, windowDay
   return (data.data?.paymentRecords?.nodes || []).filter((p) => Math.abs(p.amount - amount) < 0.005);
 }
 
+// Exact-match only (no substring/includes) — a loose match was the bug
+// that falsely tied two different EFTPY numbers together before.
 function refMatches(ref, candidates) {
   if (!ref) return false;
   const normRef = String(ref).trim().toUpperCase();
-  return candidates.some((c) => {
-    const normC = String(c).trim().toUpperCase();
-    return normRef.includes(normC) || normC.includes(normRef);
-  });
+  return candidates.some((c) => normRef === String(c).trim().toUpperCase());
 }
 
 async function verifyItem(token, item) {
   const dateObj = parseLooseDate(item.date);
+  const refCandidates = extractRefCandidates(item.detail);
 
-  // Resolve every name hint to candidate client IDs (QBO's own suggested
-  // payee is included but never trusted alone).
   const clientIds = new Map();
-  for (const name of [item.qboPayee, ...(item.nameHints || [])]) {
+  for (const name of [item.qboPayee, ...(item.nameHints || [])].filter(Boolean)) {
     for (const c of await findClientIds(token, name)) clientIds.set(c.id, c.name);
   }
 
   let all = [];
-  for (const [clientId, clientName] of clientIds) {
-    const found = await findPaymentsForClient(token, clientId, item.amount, dateObj, 21);
+  for (const [clientId] of clientIds) {
+    all.push(...(await findPaymentsForClient(token, clientId, item.amount, dateObj, 21)));
     await sleep(150);
-    all.push(...found);
   }
-  // De-dupe by entryDate+invoice (payment ids aren't returned by this query shape, but this combo is unique enough in practice).
   const seen = new Set();
   all = all.filter((p) => {
     const key = `${p.entryDate}|${p.invoice?.invoiceNumber}|${p.amount}`;
@@ -177,39 +173,62 @@ async function verifyItem(token, item) {
     return true;
   });
 
-  if (!all.length) return { ...item, status: 'NOT_FOUND', reason: `no payment at $${item.amount} found for any of [${[...clientIds.values()].join(', ')}] within +/-21 days` };
+  if (!all.length) return { ...item, status: 'NOT_FOUND', refCandidates, reason: `no payment at $${item.amount} found for any of [${[...clientIds.values()].join(', ')}] within +/-21 days` };
 
-  if (item.refCandidates.length) {
-    const refHits = all.filter((p) => refMatches(extractRef(p), item.refCandidates));
+  // The ONLY path to CONFIRMED: a reference number actually matched.
+  if (refCandidates.length) {
+    const refHits = all.filter((p) => refMatches(extractRef(p), refCandidates));
     if (refHits.length === 1) {
       const p = refHits[0];
-      return { ...item, status: 'CONFIRMED', via: `reference match (${p.__typename}: ${extractRef(p)})`, invoiceNumber: p.invoice?.invoiceNumber, client: p.client?.name, entryDate: p.entryDate, payeeMatchesQbo: p.client?.name === item.qboPayee };
+      return { ...item, status: 'CONFIRMED', refCandidates, via: `reference match (${p.__typename}: ${extractRef(p)})`, invoiceNumber: p.invoice?.invoiceNumber, client: p.client?.name, entryDate: p.entryDate, payeeMatchesQbo: p.client?.name === item.qboPayee };
     }
     if (refHits.length > 1) {
-      return { ...item, status: 'AMBIGUOUS', reason: `reference matched ${refHits.length} different payments`, candidates: refHits.map((p) => `#${p.invoice?.invoiceNumber} (${p.client?.name}) ref=${extractRef(p)} ${p.entryDate}`) };
+      return { ...item, status: 'AMBIGUOUS', refCandidates, reason: `reference matched ${refHits.length} different payments`, candidates: refHits.map((p) => `#${p.invoice?.invoiceNumber} (${p.client?.name}) ref=${extractRef(p)} ${p.entryDate}`) };
     }
   }
 
+  // No reference proof available or none matched -- report candidates
+  // honestly, never upgrade a bare amount+date hit to CONFIRMED.
+  const uniqueClients = new Set(all.map((p) => p.client?.name));
   if (all.length === 1) {
     const p = all[0];
-    return { ...item, status: 'CONFIRMED', via: 'single amount+date match (no reference# to confirm further)', invoiceNumber: p.invoice?.invoiceNumber, client: p.client?.name, entryDate: p.entryDate, payeeMatchesQbo: p.client?.name === item.qboPayee };
+    return { ...item, status: 'UNCONFIRMED_SINGLE_MATCH', refCandidates, reason: 'only one candidate, but no reference number to prove it', invoiceNumber: p.invoice?.invoiceNumber, client: p.client?.name, entryDate: p.entryDate, ref: extractRef(p), payeeMatchesQbo: p.client?.name === item.qboPayee };
   }
+  return { ...item, status: 'AMBIGUOUS', refCandidates, reason: `${all.length} matching payments across ${uniqueClients.size} client(s), no reference number matched any of them`, candidates: all.map((p) => `#${p.invoice?.invoiceNumber} (${p.client?.name}) ref=${extractRef(p) || '(none)'} ${p.entryDate}`) };
+}
 
-  const uniqueClients = new Set(all.map((p) => p.client?.name));
-  return { ...item, status: 'AMBIGUOUS', reason: `${all.length} matching payments across ${uniqueClients.size} client(s)${item.refCandidates.length ? ', none of their reference numbers matched' : ''}`, candidates: all.map((p) => `#${p.invoice?.invoiceNumber} (${p.client?.name}) ref=${extractRef(p) || '(none)'} ${p.entryDate}`) };
+function parseArgs() {
+  const args = process.argv.slice(2);
+  const get = (flag) => { const i = args.indexOf(flag); return i >= 0 ? args[i + 1] : null; };
+  const file = get('--file');
+  if (file) return { items: JSON.parse(fs.readFileSync(file, 'utf8')) };
+  const amount = get('--amount');
+  if (!amount) {
+    console.log('Usage: node scripts/qb-for-review-verify.js --amount <n> --date MM/DD/YYYY --detail "<bank text>" --qbo-payee "<name>" [--name-hint "<name>" ...]');
+    console.log('   or: node scripts/qb-for-review-verify.js --file <items.json>');
+    process.exit(1);
+  }
+  const nameHints = [];
+  args.forEach((a, i) => { if (a === '--name-hint') nameHints.push(args[i + 1]); });
+  return { items: [{ amount: parseFloat(amount), date: get('--date'), detail: get('--detail') || '', qboPayee: get('--qbo-payee') || '', nameHints }] };
 }
 
 async function main() {
+  const { items } = parseArgs();
   const token = await getToken();
-  for (const item of ITEMS) {
+  for (const item of items) {
     const result = await verifyItem(token, item);
-    console.log(`\n$${item.amount} ${item.date} [QBO suggests: ${item.qboPayee}]`);
-    console.log(`  bank detail: ${item.bankDetail}`);
+    console.log(`\n$${item.amount} ${item.date} [QBO suggests: ${item.qboPayee || '(none given)'}]`);
+    console.log(`  bank detail: ${item.detail}`);
+    console.log(`  extracted reference candidates: ${result.refCandidates.length ? result.refCandidates.join(', ') : '(none found in text)'}`);
     console.log(`  status: ${result.status}`);
     if (result.status === 'CONFIRMED') {
       console.log(`  -> Jobber invoice #${result.invoiceNumber} (${result.client}), paid ${result.entryDate}`);
       console.log(`  via: ${result.via}`);
       if (!result.payeeMatchesQbo) console.log(`  !! QBO's suggested payee ("${item.qboPayee}") does NOT match the real client ("${result.client}")`);
+    } else if (result.status === 'UNCONFIRMED_SINGLE_MATCH') {
+      console.log(`  -> only candidate: Jobber invoice #${result.invoiceNumber} (${result.client}), paid ${result.entryDate}, ref=${result.ref || '(none)'}`);
+      console.log(`  ${result.reason} -- use judgment, this is not proof-grade`);
     } else {
       console.log(`  ${result.reason}`);
       if (result.candidates) for (const c of result.candidates) console.log(`    - ${c}`);
