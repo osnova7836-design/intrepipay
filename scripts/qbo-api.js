@@ -132,6 +132,22 @@ async function createDepositForPayment({ paymentId, amount, txnDate, bankAccount
   return qboPost('/deposit', body);
 }
 
+// Creates a 2-line Journal Entry (one debit, one credit) -- used for the
+// recurring manual reclass entries (credit card clearing accounts, loan
+// interest splits) that Mrs. Kevin does by hand every month. Matches the
+// exact shape of the historical entries already in QBO.
+async function createJournalEntry({ txnDate, docNumber, debitAccountId, creditAccountId, amount, description }) {
+  const body = {
+    TxnDate: txnDate,
+    DocNumber: docNumber,
+    Line: [
+      { Amount: amount, DetailType: 'JournalEntryLineDetail', Description: description, JournalEntryLineDetail: { PostingType: 'Debit', AccountRef: { value: debitAccountId } } },
+      { Amount: amount, DetailType: 'JournalEntryLineDetail', Description: description, JournalEntryLineDetail: { PostingType: 'Credit', AccountRef: { value: creditAccountId } } },
+    ],
+  };
+  return qboPost('/journalentry', body);
+}
+
 function txnIdFromLink(qboLink) {
   const m = (qboLink || '').match(/txnId=(\d+)/);
   return m ? m[1] : null;
@@ -179,7 +195,7 @@ async function getQboCustomer(qboLink) {
   }
 }
 
-module.exports = { getQboInvoice, getQboCustomer, pullTokensFromServer, qboQuery, createDepositForPayment };
+module.exports = { getQboInvoice, getQboCustomer, pullTokensFromServer, qboQuery, createDepositForPayment, createJournalEntry };
 
 if (require.main === module) {
   if (process.argv.includes('--pull-tokens')) {
