@@ -145,6 +145,28 @@ async function createDepositForPayment({ paymentId, amount, txnDate, bankAccount
   return qboPost('/deposit', body);
 }
 
+// Creates a new Chart of Accounts entry -- used once (2026-10-07) to set
+// up "Prior Period Clearing", a dedicated equity account for catching up
+// transactions in a period the accountant has already closed/reported on,
+// without disturbing the real bank account's already-reconciled balance
+// for that period. Kept generic in case Ycheten needs another account
+// later.
+async function createAccount({ name, accountType, accountSubType }) {
+  const body = { Name: name, AccountType: accountType, AccountSubType: accountSubType };
+  return qboPost('/account', body);
+}
+
+// Sparse-updates an existing Deposit's "deposit to" account, leaving its
+// date, lines, and LinkedTxn (the real customer payment it represents)
+// untouched -- this is the mechanism for "move it to the dummy account"
+// requested by the accountant for a closed period, confirmed live
+// 2026-10-07: changing which account receives the deposit, never its
+// date, is what avoids disturbing an already-reconciled real bank period.
+async function updateDepositAccount({ depositId, syncToken, newAccountId }) {
+  const body = { Id: depositId, SyncToken: syncToken, sparse: true, DepositToAccountRef: { value: newAccountId } };
+  return qboPost('/deposit', body);
+}
+
 // Creates a 2-line Journal Entry (one debit, one credit) -- used for the
 // recurring manual reclass entries (credit card clearing accounts, loan
 // interest splits) that Mrs. Kevin does by hand every month. Matches the
@@ -208,7 +230,7 @@ async function getQboCustomer(qboLink) {
   }
 }
 
-module.exports = { getQboInvoice, getQboCustomer, pullTokensFromServer, qboQuery, qboReport, createDepositForPayment, createJournalEntry };
+module.exports = { getQboInvoice, getQboCustomer, pullTokensFromServer, qboQuery, qboReport, createDepositForPayment, createJournalEntry, createAccount, updateDepositAccount };
 
 if (require.main === module) {
   if (process.argv.includes('--pull-tokens')) {
