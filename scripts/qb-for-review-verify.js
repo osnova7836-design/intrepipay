@@ -17,10 +17,16 @@
 // This pulls every plausible reference token out of the bank feed's raw
 // description text automatically (ID:, Conf#, trailing digits after an
 // XXXXX mask, etc.) and matches them against those fields directly —
-// CONFIRMED only ever means a reference number actually matched. A single
-// amount+date candidate with no reference to check against is reported
-// separately as UNCONFIRMED_SINGLE_MATCH, never CONFIRMED, since that was
-// exactly the kind of false confidence that caused problems before.
+// CONFIRMED only ever means a reference number actually matched.
+//
+// HARD RULE, confirmed live 2026-10-06 after TWO real false positives in
+// one session (a "$50 = Rely invoice #19506" and a "$165 = ORHP invoice
+// #20484" match, the second of which turned out to have ZERO actual
+// payment records attached despite being reported as confirmed): a single
+// amount+date candidate is NEVER a match, no matter how unique it looks.
+// That case is reported as DO_NOT_MATCH_NO_REFERENCE, with the word "do
+// not match" in the status itself, specifically so it can never again be
+// read or printed as if it were an answer.
 //
 // Watch out: some payers reuse a constant vendor/batch ID across
 // unrelated payments (confirmed: FAHW's "ID:1164427" appeared on two
@@ -187,12 +193,18 @@ async function verifyItem(token, item) {
     }
   }
 
-  // No reference proof available or none matched -- report candidates
-  // honestly, never upgrade a bare amount+date hit to CONFIRMED.
+  // HARD RULE (confirmed live 2026-10-06, after two real false positives --
+  // a $50 "Rely" match and a $165 "ORHP" match that both turned out wrong,
+  // one of them attached to an invoice with ZERO actual payment records):
+  // NEVER report anything resembling a match without a verified reference
+  // number. A single amount+date candidate is NOT a match, no matter how
+  // unique it looks -- it's just a candidate worth a human's attention.
+  // This status is intentionally never called CONFIRMED or anything that
+  // could be read as a go-ahead to click Match.
   const uniqueClients = new Set(all.map((p) => p.client?.name));
   if (all.length === 1) {
     const p = all[0];
-    return { ...item, status: 'UNCONFIRMED_SINGLE_MATCH', refCandidates, reason: 'only one candidate, but no reference number to prove it', invoiceNumber: p.invoice?.invoiceNumber, client: p.client?.name, entryDate: p.entryDate, ref: extractRef(p), payeeMatchesQbo: p.client?.name === item.qboPayee };
+    return { ...item, status: 'DO_NOT_MATCH_NO_REFERENCE', refCandidates, reason: 'exactly one candidate by amount+date, but NO reference number proves it -- do not match this', candidateInvoiceNumber: p.invoice?.invoiceNumber, candidateClient: p.client?.name, candidateEntryDate: p.entryDate, candidateRef: extractRef(p) };
   }
   return { ...item, status: 'AMBIGUOUS', refCandidates, reason: `${all.length} matching payments across ${uniqueClients.size} client(s), no reference number matched any of them`, candidates: all.map((p) => `#${p.invoice?.invoiceNumber} (${p.client?.name}) ref=${extractRef(p) || '(none)'} ${p.entryDate}`) };
 }
@@ -226,9 +238,9 @@ async function main() {
       console.log(`  -> Jobber invoice #${result.invoiceNumber} (${result.client}), paid ${result.entryDate}`);
       console.log(`  via: ${result.via}`);
       if (!result.payeeMatchesQbo) console.log(`  !! QBO's suggested payee ("${item.qboPayee}") does NOT match the real client ("${result.client}")`);
-    } else if (result.status === 'UNCONFIRMED_SINGLE_MATCH') {
-      console.log(`  -> only candidate: Jobber invoice #${result.invoiceNumber} (${result.client}), paid ${result.entryDate}, ref=${result.ref || '(none)'}`);
-      console.log(`  ${result.reason} -- use judgment, this is not proof-grade`);
+    } else if (result.status === 'DO_NOT_MATCH_NO_REFERENCE') {
+      console.log(`  DO NOT MATCH -- ${result.reason}`);
+      console.log(`  (for reference only, not a recommendation: candidate was invoice #${result.candidateInvoiceNumber}, ${result.candidateClient}, ${result.candidateEntryDate})`);
     } else {
       console.log(`  ${result.reason}`);
       if (result.candidates) for (const c of result.candidates) console.log(`    - ${c}`);
