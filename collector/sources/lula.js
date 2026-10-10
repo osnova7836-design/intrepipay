@@ -51,8 +51,13 @@ async function collect({ daysBack = 30 } = {}) {
 
     if (!fs.existsSync(DOWNLOAD_DIR)) fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
 
+    // Export now opens in a new tab (which navigates to a signed export_url and
+    // triggers the actual file download there) instead of downloading directly on
+    // this page — confirmed live 2026-10-09. The download event fires at the
+    // context level for that new tab, not on this page, so page.waitForEvent
+    // ('download') never saw it and just timed out after 30s.
     const [download] = await Promise.all([
-      page.waitForEvent('download'),
+      ctx.waitForEvent('download'),
       page.getByRole('button', { name: /export/i }).click(),
     ]);
 
@@ -95,13 +100,24 @@ function parseExport(filePath, daysBack) {
   // Group rows by PAYOUT ID (a payout may cover multiple jobs)
   const payoutMap = {};
 
+  // Lula's export has the content of these two columns swapped relative to
+  // their own headers — and relative to what the portal's on-screen Payouts
+  // table shows for the same row. Confirmed live 2026-10-09 against a real
+  // payout (2519AB2 / WO 6A8CE3, $75 job value, $50 no-show-fee deduction,
+  // $25 actual bank deposit — Dr. Caldwell confirmed $25 is what came in):
+  // the file's "JOBS TOTAL" column holds the real net payout ($25 here), and
+  // "TOTAL PAYOUT" holds the real gross job value before any deduction ($75).
+  // Matters because a deduction can belong to a DIFFERENT work order than the
+  // one on this row (a no-show fee elsewhere, not tied to this job) — so the
+  // per-job amount used for Jobber matching must stay at the job's own gross
+  // value, not have an unrelated deduction baked into it.
   for (const row of rows) {
-    const payoutId   = String(row['PAYOUT ID'] || '').trim();
-    const jobId      = String(row['RELATED JOBS'] || '').trim();
-    const totalPayout = parseAmount(row['TOTAL PAYOUT']);
-    const jobsTotal  = parseAmount(row['JOBS TOTAL']);
-    const dateStr    = String(row['PAYOUT DATE'] || '').trim();
-    const date       = new Date(dateStr);
+    const payoutId  = String(row['PAYOUT ID'] || '').trim();
+    const jobId     = String(row['RELATED JOBS'] || '').trim();
+    const netPayout = parseAmount(row['JOBS TOTAL']);   // mislabeled: actual bank-deposit amount
+    const grossJobs = parseAmount(row['TOTAL PAYOUT']); // mislabeled: actual job(s) value pre-deduction
+    const dateStr   = String(row['PAYOUT DATE'] || '').trim();
+    const date      = new Date(dateStr);
 
     if (!payoutId || isNaN(date) || date < cutoff) continue;
 
@@ -110,13 +126,13 @@ function parseExport(filePath, daysBack) {
         company: 'Lula',
         paymentRef: payoutId,
         paymentDate: date.toISOString().slice(0, 10),
-        amount: totalPayout,
+        amount: netPayout,
         workOrders: [],
       };
     }
 
     if (jobId) {
-      payoutMap[payoutId].workOrders.push({ workOrder: jobId, amount: jobsTotal });
+      payoutMap[payoutId].workOrders.push({ workOrder: jobId, amount: grossJobs });
     }
   }
 
